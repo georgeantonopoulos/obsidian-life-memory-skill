@@ -30,7 +30,7 @@ obsidian-life-memory-skill/
 
 1. Clone into your skills directory:
 ```bash
-git clone https://github.com/<your-org>/obsidian-life-memory-skill.git ~/.codex/skills/obsidian-life-memory
+git clone https://github.com/georgeantonopoulos/obsidian-life-memory-skill.git ~/.codex/skills/obsidian-life-memory
 ```
 
 2. Verify the script works:
@@ -51,7 +51,7 @@ If your runtime has the `skill-installer` workflow available, install directly f
 
 ```bash
 python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
-  --repo <your-org>/obsidian-life-memory-skill \
+  --repo georgeantonopoulos/obsidian-life-memory-skill \
   --path .
 ```
 
