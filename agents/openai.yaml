@@ -1,0 +1,6 @@
+schema_version: v1
+name_for_human: Obsidian Life Memory
+name_for_model: obsidian-life-memory
+description_for_human: Maintain an Obsidian life-memory vault with daily logging and distillation.
+description_for_model: Use this skill to manage an Obsidian-backed personal memory vault, including context retrieval, daily event logging, organization, and memory distillation.
+default_prompt: Help me maintain my Obsidian life memory vault and keep long-term memory synchronized from daily logs.
