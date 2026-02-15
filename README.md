@@ -78,4 +78,4 @@ python3 scripts/life_memory.py audit
 
 ## License
 
-MIT (add your preferred license if different).
+MIT
