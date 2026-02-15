@@ -66,8 +66,13 @@ python3 scripts/life_memory.py distill --date "2026-02-14"
 python3 scripts/life_memory.py audit
 ```
 
+## Pre-Prompt Hook
+
+This skill includes an `agent:bootstrap` hook (`hooks/obsidian-preprompt.js`) that automatically injects the essence of the current daily log into the agent's context as `OBSIDIAN_DAILY.md`. This ensures continuity without requiring manual tool calls.
+
 ## Resources
 
 - Script entrypoint: `scripts/life_memory.py`
+- Pre-Prompt hook: `hooks/obsidian-preprompt.js`
 - Pattern guide: `references/life-patterns.md`
 - Obsidian CLI notes: `references/obsidian-cli-notes.md`
