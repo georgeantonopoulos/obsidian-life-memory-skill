@@ -151,11 +151,24 @@ function resolveDailyPath() {
 }
 
 function readDailyViaFileFallback() {
-  const dailyPath = resolveDailyPath();
-  if (!fs.existsSync(dailyPath)) {
-    throw new Error(`Daily log not found at ${dailyPath}`);
+  const filename = `${getTodayDateString()}.md`;
+  const vaultRoot = resolveVaultRoot();
+  
+  // Check multiple locations for daily note (OpenClaw supports various structures)
+  const possiblePaths = [
+    path.join(vaultRoot, 'Daily', filename),           // Standard Obsidian Daily folder
+    path.join(vaultRoot, 'memory', filename),          // OpenClaw memory folder
+    path.join(vaultRoot, filename),                    // Root level
+  ];
+  
+  for (const dailyPath of possiblePaths) {
+    if (fs.existsSync(dailyPath)) {
+      return fs.readFileSync(dailyPath, 'utf8');
+    }
   }
-  return fs.readFileSync(dailyPath, 'utf8');
+  
+  // If not found anywhere, return empty (no daily note yet)
+  return '';
 }
 
 /**
