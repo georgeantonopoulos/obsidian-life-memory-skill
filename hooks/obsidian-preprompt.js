@@ -2,53 +2,238 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
-/**
- * Obsidian Pre-Prompt Hook
- * Injects the latest Obsidian daily log into the agent's bootstrap context on every turn.
- * Applied globally to ensure 100% memory continuity for current-day events.
- */
-export default async function handler(event, context) {
-  if (event.type === 'agent:bootstrap') {
-    try {
-      // 1. Attempt to read via Obsidian CLI (preferred for real-time sync)
-      let obsidianOutput = '';
-      try {
-        obsidianOutput = execSync('DISPLAY=:99 /usr/local/bin/obsidian-cli daily:read', { 
-          encoding: 'utf8',
-          timeout: 3000 // Slightly increased timeout
-        });
-      } catch (cliError) {
-        // console.error('⚠️ Obsidian CLI failure, attempting direct file read...');
-        
-        // 2. Fallback: Direct file read if CLI fails (e.g. headless service down)
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, '0');
-        const day = String(now.getDate()).padStart(2, '0');
-        const dailyPath = path.join(process.cwd(), 'Daily', `${year}-${month}-${day}.md`);
-        
-        if (fs.existsSync(dailyPath)) {
-          obsidianOutput = fs.readFileSync(dailyPath, 'utf8');
-        } else {
-          throw new Error(`Daily log not found at ${dailyPath}`);
-        }
+const OBSIDIAN_CLI_CMD = 'DISPLAY=:99 /usr/local/bin/obsidian-cli daily:read';
+const CLI_TIMEOUT_MS = 3000;
+const MAX_SNAPSHOT_CHARS = 12000;
+
+function readDailyViaCli() {
+  return execSync(OBSIDIAN_CLI_CMD, {
+    encoding: 'utf8',
+    timeout: CLI_TIMEOUT_MS,
+  });
+}
+
+function resolveDailyPath() {
+  const now = new Date();
+  const yyyy = String(now.getFullYear());
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  const filename = `${yyyy}-${mm}-${dd}.md`;
+
+  const vaultRoot = process.env.OBSIDIAN_VAULT_PATH || process.cwd();
+  return path.join(vaultRoot, 'Daily', filename);
+}
+
+function readDailyViaFileFallback() {
+  const dailyPath = resolveDailyPath();
+  if (!fs.existsSync(dailyPath)) {
+    throw new Error(`Daily log not found at ${dailyPath}`);
+  }
+  return fs.readFileSync(dailyPath, 'utf8');
+}
+
+function extractWikilinks(text) {
+  const matches = text.match(/!?\[\[[^\]]+\]\]/g) || [];
+  return Array.from(new Set(matches));
+}
+
+function extractTags(text) {
+  const matches = text.match(/(^|\s)(#[A-Za-z0-9_\/-]+)/gim) || [];
+  const normalized = matches.map((m) => m.trim());
+  return Array.from(new Set(normalized));
+}
+
+function extractTaskLines(lines) {
+  return lines.filter((line) => /^\s*- \[( |x|X)\]\s/.test(line));
+}
+
+function extractCommentLines(lines) {
+  const out = [];
+  let inBlockComment = false;
+
+  for (const line of lines) {
+    if (line.includes('%%')) {
+      const markerCount = (line.match(/%%/g) || []).length;
+      if (markerCount % 2 === 1) {
+        inBlockComment = !inBlockComment;
       }
-      
-      if (obsidianOutput && obsidianOutput.trim()) {
-        context.bootstrapFiles = context.bootstrapFiles || {};
-        
-        // Inject as a virtual file that will appear in Project Context
-        context.bootstrapFiles['OBSIDIAN_DAILY.md'] = `# Obsidian Daily Log Essence\n\n${obsidianOutput.trim()}\n\n---\n*Injected via Obsidian Pre-Prompt Hook*`;
-      } else {
-        // If empty, provide a hint to the agent
-        context.bootstrapFiles = context.bootstrapFiles || {};
-        context.bootstrapFiles['OBSIDIAN_DAILY.md'] = `# Obsidian Daily Log\n\nNo log entries found for today yet. Use the obsidian-life-memory skill to log events.`;
-      }
-    } catch (error) {
-      // Provide an error hint in the context so the agent knows memory is failing
-      context.bootstrapFiles = context.bootstrapFiles || {};
-      context.bootstrapFiles['OBSIDIAN_ERROR.md'] = `# Obsidian Memory Error\n\nThe pre-prompt hook failed to load today's log: ${error.message}\n\nPlease check the Obsidian service status.`;
-      console.error('❌ Obsidian preprompt hook failure:', error.message);
+      out.push(line);
+      continue;
     }
+
+    if (inBlockComment) {
+      out.push(line);
+    }
+  }
+
+  return out;
+}
+
+function findHeadingContext(lines, startIdx) {
+  const headings = [];
+  for (let i = 0; i <= startIdx; i += 1) {
+    const line = lines[i];
+    if (/^#{1,6}\s/.test(line)) {
+      headings.push(line);
+    }
+  }
+  return headings;
+}
+
+function clipFromTailByLine(lines, maxChars) {
+  const picked = [];
+  let used = 0;
+
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const candidate = lines[i];
+    const cost = candidate.length + 1;
+
+    // Never split lines: either include the full line or skip it.
+    if (used + cost > maxChars) {
+      continue;
+    }
+
+    picked.push(i);
+    used += cost;
+  }
+
+  if (picked.length === 0) {
+    return [];
+  }
+
+  picked.sort((a, b) => a - b);
+  const startIdx = picked[0];
+  const headingContext = findHeadingContext(lines, startIdx);
+
+  const result = [];
+  const seen = new Set();
+
+  for (const heading of headingContext) {
+    if (!seen.has(heading)) {
+      result.push(heading);
+      seen.add(heading);
+    }
+  }
+
+  for (const idx of picked) {
+    const line = lines[idx];
+    if (line.length === 0 || !seen.has(line)) {
+      result.push(line);
+      seen.add(line);
+    }
+  }
+
+  return result;
+}
+
+function buildObsidianSafeSnapshot(raw, maxChars) {
+  const text = String(raw || '').replace(/\r\n?/g, '\n').trim();
+  if (!text) {
+    return '';
+  }
+
+  if (text.length <= maxChars) {
+    return text;
+  }
+
+  const lines = text.split('\n');
+  const clippedLines = clipFromTailByLine(lines, Math.floor(maxChars * 0.65));
+  const allTasks = extractTaskLines(lines);
+  const allLinks = extractWikilinks(text);
+  const allTags = extractTags(text);
+  const commentLines = extractCommentLines(lines);
+
+  const parts = [];
+
+  parts.push('## Recent Snapshot');
+  parts.push(clippedLines.join('\n').trim());
+
+  if (allTasks.length) {
+    parts.push('## Tasks (Preserved)');
+    parts.push(allTasks.join('\n'));
+  }
+
+  if (allLinks.length) {
+    parts.push('## Wikilinks (Graph Integrity)');
+    parts.push(allLinks.join(' '));
+  }
+
+  if (allTags.length) {
+    parts.push('## Tags');
+    parts.push(allTags.join(' '));
+  }
+
+  if (commentLines.length) {
+    parts.push('## Comments');
+    parts.push(commentLines.join('\n'));
+  }
+
+  const assembled = parts.filter(Boolean).join('\n\n').trim();
+
+  if (assembled.length <= maxChars) {
+    return assembled;
+  }
+
+  // Final guard: still line-based clipping only, so wikilinks remain intact.
+  const bounded = [];
+  let used = 0;
+  for (const line of assembled.split('\n')) {
+    const cost = line.length + 1;
+    if (used + cost > maxChars) {
+      continue;
+    }
+    bounded.push(line);
+    used += cost;
+  }
+
+  return `${bounded.join('\n').trim()}\n\n[Truncated safely by line boundaries to preserve Obsidian syntax]`;
+}
+
+export default async function handler(event, context) {
+  if (event.type !== 'agent:bootstrap') {
+    return;
+  }
+
+  context.bootstrapFiles = context.bootstrapFiles || {};
+
+  try {
+    let obsidianOutput = '';
+
+    try {
+      // Primary integration path: Obsidian CLI for current vault-aware daily note content.
+      obsidianOutput = readDailyViaCli();
+    } catch (_cliError) {
+      // Fallback path: direct file read from Daily/YYYY-MM-DD.md.
+      obsidianOutput = readDailyViaFileFallback();
+    }
+
+    const safeSnapshot = buildObsidianSafeSnapshot(obsidianOutput, MAX_SNAPSHOT_CHARS);
+
+    if (safeSnapshot) {
+      context.bootstrapFiles['OBSIDIAN_DAILY.md'] = [
+        '# Obsidian Daily Log Essence',
+        '',
+        safeSnapshot,
+        '',
+        '---',
+        '*Injected via Obsidian Pre-Prompt Hook (CLI primary, file fallback)*',
+      ].join('\n');
+    } else {
+      context.bootstrapFiles['OBSIDIAN_DAILY.md'] = [
+        '# Obsidian Daily Log',
+        '',
+        'No log entries found for today yet. Use the obsidian-life-memory skill to log events.',
+      ].join('\n');
+    }
+  } catch (error) {
+    context.bootstrapFiles['OBSIDIAN_ERROR.md'] = [
+      '# Obsidian Memory Error',
+      '',
+      `The pre-prompt hook failed to load today's log: ${error.message}`,
+      '',
+      'Please check the Obsidian service status.',
+    ].join('\n');
+
+    console.error('Obsidian preprompt hook failure:', error.message);
   }
 }
