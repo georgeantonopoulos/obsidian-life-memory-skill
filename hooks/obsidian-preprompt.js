@@ -1,10 +1,103 @@
 import { execSync } from 'child_process';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
 const OBSIDIAN_CLI_CMD = 'DISPLAY=:99 /usr/local/bin/obsidian-cli daily:read';
 const CLI_TIMEOUT_MS = 3000;
 const MAX_SNAPSHOT_CHARS = 12000;
+const MAX_SNAPSHOT_TOKENS = Math.ceil(MAX_SNAPSHOT_CHARS / 4);
+
+function resolveVaultRoot() {
+  return process.env.OBSIDIAN_VAULT_PATH || process.cwd();
+}
+
+function getTodayDateString() {
+  const now = new Date();
+  const yyyy = String(now.getFullYear());
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function getStateFilePath() {
+  return path.join(resolveVaultRoot(), '.obsidian-bootstrap-state.json');
+}
+
+function readBootstrapState() {
+  const statePath = getStateFilePath();
+  if (!fs.existsSync(statePath)) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeBootstrapState(state) {
+  const statePath = getStateFilePath();
+  fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+}
+
+function computeSha256(text) {
+  return crypto.createHash('sha256').update(String(text || ''), 'utf8').digest('hex');
+}
+
+function estimateTokens(text) {
+  return Math.ceil(String(text || '').length / 4);
+}
+
+function trimTextToTokenBudget(text, tokenBudget) {
+  const normalized = String(text || '').replace(/\r\n?/g, '\n').trim();
+  if (!normalized || tokenBudget <= 0) {
+    return '';
+  }
+
+  if (estimateTokens(normalized) <= tokenBudget) {
+    return normalized;
+  }
+
+  const lines = normalized.split('\n');
+  const kept = [];
+  let used = 0;
+
+  for (const line of lines) {
+    const cost = estimateTokens(`${line}\n`);
+    if (used + cost > tokenBudget) {
+      break;
+    }
+    kept.push(line);
+    used += cost;
+  }
+
+  return kept.join('\n').trim();
+}
+
+function buildTokenAwareSnapshot({ deltaText, fullSnapshot, tokenBudget }) {
+  const parts = [];
+  let remaining = tokenBudget;
+
+  if (deltaText) {
+    const deltaBlock = trimTextToTokenBudget(`Since you last spoke:\n${deltaText}`, remaining);
+    if (deltaBlock) {
+      parts.push(deltaBlock);
+      remaining -= estimateTokens(deltaBlock);
+    }
+  }
+
+  if (fullSnapshot && remaining > 0) {
+    const summaryBlock = trimTextToTokenBudget(fullSnapshot, remaining);
+    if (summaryBlock) {
+      parts.push(summaryBlock);
+    }
+  }
+
+  return trimTextToTokenBudget(parts.join('\n\n---\n\n'), tokenBudget);
+}
 
 function readDailyViaCli() {
   return execSync(OBSIDIAN_CLI_CMD, {
@@ -14,13 +107,9 @@ function readDailyViaCli() {
 }
 
 function resolveDailyPath() {
-  const now = new Date();
-  const yyyy = String(now.getFullYear());
-  const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const dd = String(now.getDate()).padStart(2, '0');
-  const filename = `${yyyy}-${mm}-${dd}.md`;
+  const filename = `${getTodayDateString()}.md`;
 
-  const vaultRoot = process.env.OBSIDIAN_VAULT_PATH || process.cwd();
+  const vaultRoot = resolveVaultRoot();
   return path.join(vaultRoot, 'Daily', filename);
 }
 
@@ -197,6 +286,9 @@ export default async function handler(event, context) {
   context.bootstrapFiles = context.bootstrapFiles || {};
 
   try {
+    const today = getTodayDateString();
+    const state = readBootstrapState();
+    const dayState = state[today] || null;
     let obsidianOutput = '';
 
     try {
@@ -207,7 +299,40 @@ export default async function handler(event, context) {
       obsidianOutput = readDailyViaFileFallback();
     }
 
-    const safeSnapshot = buildObsidianSafeSnapshot(obsidianOutput, MAX_SNAPSHOT_CHARS);
+    const normalizedOutput = String(obsidianOutput || '').replace(/\r\n?/g, '\n');
+    const noteHash = computeSha256(normalizedOutput);
+    const lineCount = normalizedOutput ? normalizedOutput.split('\n').length : 0;
+
+    let safeSnapshot = '';
+
+    if (dayState && dayState.noteHash === noteHash && dayState.snapshot) {
+      safeSnapshot = dayState.snapshot;
+    } else {
+      const fullSnapshot = buildObsidianSafeSnapshot(normalizedOutput, MAX_SNAPSHOT_CHARS);
+      let deltaText = '';
+
+      if (dayState && Number.isInteger(dayState.lastLineCount) && lineCount > dayState.lastLineCount) {
+        deltaText = normalizedOutput
+          .split('\n')
+          .slice(dayState.lastLineCount)
+          .join('\n')
+          .trim();
+      }
+
+      safeSnapshot = buildTokenAwareSnapshot({
+        deltaText,
+        fullSnapshot,
+        tokenBudget: MAX_SNAPSHOT_TOKENS,
+      });
+
+      state[today] = {
+        noteHash,
+        snapshot: safeSnapshot,
+        lastLineCount: lineCount,
+        lastUpdatedIso: new Date().toISOString(),
+      };
+      writeBootstrapState(state);
+    }
 
     if (safeSnapshot) {
       context.bootstrapFiles['OBSIDIAN_DAILY.md'] = [
