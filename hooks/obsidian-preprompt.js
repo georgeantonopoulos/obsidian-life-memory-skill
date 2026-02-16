@@ -9,7 +9,33 @@ const MAX_SNAPSHOT_CHARS = 12000;
 const MAX_SNAPSHOT_TOKENS = Math.ceil(MAX_SNAPSHOT_CHARS / 4);
 
 function resolveVaultRoot() {
-  return process.env.OBSIDIAN_VAULT_PATH || process.cwd();
+  // 1. Check environment variable first
+  if (process.env.OBSIDIAN_VAULT_PATH) {
+    return process.env.OBSIDIAN_VAULT_PATH;
+  }
+
+  // 2. Try to read from Python CLI config file
+  try {
+    const homedir = process.env.HOME || process.env.USERPROFILE || '/root';
+    const configPath = path.join(
+      homedir,
+      '.local',
+      'state',
+      'obsidian-life-memory',
+      'vault_config.json'
+    );
+    if (fs.existsSync(configPath)) {
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      if (config.vault_path) {
+        return config.vault_path;
+      }
+    }
+  } catch {
+    // Config file doesn't exist or is invalid, continue to fallback
+  }
+
+  // 3. Fall back to current working directory
+  return process.cwd();
 }
 
 function getTodayDateString() {

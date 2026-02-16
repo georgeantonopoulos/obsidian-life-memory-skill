@@ -165,6 +165,25 @@ python3 ~/.codex/skills/obsidian-life-memory/scripts/life_memory.py show-vault
 
 The skill will be discoverable after restart.
 
+## Vault Path Configuration
+
+The skill resolves the vault path in this priority order:
+
+1. **`OBSIDIAN_VAULT_PATH` environment variable** — Highest priority
+   ```bash
+   export OBSIDIAN_VAULT_PATH="/path/to/your/vault"
+   ```
+
+2. **Python CLI config file** — Set via `set-vault` command
+   ```bash
+   python3 scripts/life_memory.py set-vault --vault-path "/path/to/vault"
+   ```
+   Stored at: `~/.local/state/obsidian-life-memory/vault_config.json`
+
+3. **Current working directory** — Fallback if neither above is set
+
+The pre-prompt hook and CLI helper both use this resolution order, so setting the path once (via env var or CLI) works for both.
+
 ## Usage
 
 ### Search and Retrieve
@@ -250,7 +269,7 @@ obsidian-life-memory-skill/
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `OBSIDIAN_VAULT_PATH` | Root path to Obsidian vault | `process.cwd()` |
+| `OBSIDIAN_VAULT_PATH` | Root path to Obsidian vault (highest priority) | Reads from config file, then `process.cwd()` |
 | `OBSIDIAN_BOOTSTRAP_TOKEN_BUDGET` | Max tokens for hook output | 3000 |
 
 ### State Files
