@@ -7,7 +7,7 @@ Transform your OpenClaw workspace into a **structured, navigable memory system**
 This skill helps agents maintain continuity across sessions by organizing information into an Obsidian vault with:
 
 - **Daily notes** — Timestamped logs of events, decisions, and context
-- **Wikilinked entities** — People, projects, and concepts as connected nodes (`[[Athens Move]]`, `[[Maya]]`)
+- **Wikilinked entities** — People, projects, and concepts as connected nodes (`[[Project Name]]`, `[[Person]]`)
 - **Graph navigation** — Traverse connections between related information
 - **Long-term memory** — Distilled summaries from daily noise
 - **Automatic context injection** — Pre-prompt hook loads relevant context at session start
@@ -36,8 +36,8 @@ workspace/
 │   └── 2026-02-16.md
 │
 ├── /Projects                # Active projects with backlinks
-│   ├── [[Athens Move]].md
-│   └── [[Shell Shocked Feed]].md
+│   ├── [[Project Alpha]].md
+│   └── [[Project Beta]].md
 │
 └── /Archives                # Completed/cold projects
 ```
@@ -49,9 +49,9 @@ workspace/
 Obsidian's `[[...]]` syntax creates traversable connections:
 
 ```markdown
-- Met with [[George]] about [[Athens Move]]
-- Need to follow up with [[Elpi]] on [[MacBook Repair]]
-- [[Maya]] and [[Christopher]] start at [[Sxoli Moraiti]] in March
+- Met with [[Client]] about [[Project Alpha]]
+- Need to follow up with [[Vendor]] on [[Equipment Issue]]
+- [[Person A]] and [[Person B]] start at [[Organization]] next month
 ```
 
 These links form a knowledge graph. The agent can:
@@ -74,12 +74,12 @@ tags: [daily, log]
 
 ## Events
 - **08:00** [System] Updated Obsidian hook with token optimization [[GitHub]]
-- **09:30** [Planning] Reviewed Athens apartment listings [[Athens Move]]
-- **14:00** [Health] Scheduled dental appointment [[George]]
+- **09:30** [Planning] Reviewed project proposals [[Project Alpha]]
+- **14:00** [Health] Scheduled annual checkup [[Doctor]]
 
 ## Connectors
 - [[SOUL]]
-- [[Athens Move]]
+- [[Project Alpha]]
 - [[GitHub]]
 ```
 
@@ -92,7 +92,7 @@ The skill uses the Obsidian CLI (`obsidian` command) for vault operations:
 obsidian daily:read
 
 # Search the vault
-obsidian search --query "Athens"
+obsidian search --query "project"
 
 # Append an event to today's note
 obsidian daily:append --content "- **10:00** [Event] Description [[Link]]"
@@ -171,13 +171,13 @@ The skill will be discoverable after restart.
 
 ```bash
 # Search across all notes
-python3 scripts/life_memory.py search --query "Athens move"
+python3 scripts/life_memory.py search --query "project proposal"
 
 # Read a specific file
 python3 scripts/life_memory.py read --file "Daily/2026-02-15.md"
 
 # Read via Obsidian CLI (real-time sync)
-obsidian read --file "Projects/Athens Move.md"
+obsidian read --file "Projects/Project Alpha.md"
 ```
 
 ### Log Events
@@ -186,14 +186,14 @@ obsidian read --file "Projects/Athens Move.md"
 # Log to today's daily note with wikilinks
 python3 scripts/life_memory.py log-event \
   --category "Planning" \
-  --event "Viewed apartments in Kolonaki" \
-  --details "Scheduled viewings for Feb 18-19" \
-  --tags "athens,housing"
+  --event "Reviewed vendor proposals" \
+  --details "Selected three candidates for follow-up" \
+  --tags "planning,vendor"
 ```
 
 This creates entries like:
 ```markdown
-- **14:30** [Planning] Viewed apartments in Kolonaki — Scheduled viewings for Feb 18-19 #athens #housing [[Athens Move]]
+- **14:30** [Planning] Reviewed vendor proposals — Selected three candidates for follow-up #planning #vendor [[Project Alpha]]
 ```
 
 ### Organize the Vault
