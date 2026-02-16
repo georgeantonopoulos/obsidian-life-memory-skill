@@ -1,189 +1,269 @@
 # obsidian-life-memory-skill
 
-Obsidian memory-management skill for OpenClaw/Codex-style agents with **token-optimized incremental loading**.
+Transform your OpenClaw workspace into a **structured, navigable memory system** using Obsidian. This skill provides persistent personal memory for AI agents through wikilinked notes, daily logs, and graph-based context retrieval.
 
-## Overview
+## What It Does
 
-This skill provides persistent personal memory for AI agents using an Obsidian vault. It includes:
-- A triggerable `SKILL.md` for agents
-- A **pre-prompt hook** that injects daily context with **stateful caching**
-- A portable CLI helper (`scripts/life_memory.py`) for vault operations
-- Reference docs for daily note patterns and Obsidian CLI behavior
+This skill helps agents maintain continuity across sessions by organizing information into an Obsidian vault with:
 
-## Key Features
+- **Daily notes** — Timestamped logs of events, decisions, and context
+- **Wikilinked entities** — People, projects, and concepts as connected nodes (`[[Athens Move]]`, `[[Maya]]`)
+- **Graph navigation** — Traverse connections between related information
+- **Long-term memory** — Distilled summaries from daily noise
+- **Automatic context injection** — Pre-prompt hook loads relevant context at session start
 
-### 🚀 Token-Optimized Pre-Prompt Hook
+## Vault Taxonomy
 
-The `hooks/obsidian-preprompt.js` hook solves token inflation in long-running daily logs:
+The skill organizes your workspace into a connected graph:
 
-| Feature | Benefit |
-|---------|---------|
-| **SHA256 Hash Caching** | Returns cached snapshot instantly if daily note unchanged |
-| **Incremental Delta Loading** | Only processes new lines since last session |
-| **Token-Aware Budgeting** | Enforces ~3000 token limit regardless of log size |
-| **"Since you last spoke"** | Prepends new content for context continuity |
-| **Obsidian-Safe** | Preserves wikilinks `[[...]]`, tags `#tag`, tasks `- [ ]` |
+```
+workspace/
+├── [[IDENTITY]].md          # Who the agent is (name, vibe, emoji)
+├── [[USER]].md              # Who the human is (preferences, context)
+├── [[SOUL]].md              # Behavioral guidelines and boundaries
+├── [[MEMORY]].md            # Long-term distilled knowledge
+├── [[HEARTBEAT]].md         # System status and maintenance notes
+├── [[BOOTSTRAP]].md         # First-run instructions (delete after setup)
+│
+├── /Context                 # Stable reference information
+│   ├── locations.md
+│   ├── vehicles.md
+│   └── preferences.md
+│
+├── /Daily                   # Timestamped logs (YYYY-MM-DD.md)
+│   ├── 2026-02-14.md
+│   ├── 2026-02-15.md
+│   └── 2026-02-16.md
+│
+├── /Projects                # Active projects with backlinks
+│   ├── [[Athens Move]].md
+│   └── [[Shell Shocked Feed]].md
+│
+└── /Archives                # Completed/cold projects
+```
 
-**State Persistence:** `.obsidian-bootstrap-state.json` tracks per-day:
+## Core Concepts
+
+### Wikilinks — The Graph Backbone
+
+Obsidian's `[[...]]` syntax creates traversable connections:
+
+```markdown
+- Met with [[George]] about [[Athens Move]]
+- Need to follow up with [[Elpi]] on [[MacBook Repair]]
+- [[Maya]] and [[Christopher]] start at [[Sxoli Moraiti]] in March
+```
+
+These links form a knowledge graph. The agent can:
+- Follow connections to gather context
+- Identify related entities automatically
+- Maintain persistent identity through `[[SOUL]]` and `[[IDENTITY]]`
+
+### Daily Notes — Event Stream
+
+Each day gets a log file at `Daily/YYYY-MM-DD.md`:
+
+```markdown
+---
+type: daily-log
+created: 2026-02-16
+tags: [daily, log]
+---
+
+# 2026-02-16
+
+## Events
+- **08:00** [System] Updated Obsidian hook with token optimization [[GitHub]]
+- **09:30** [Planning] Reviewed Athens apartment listings [[Athens Move]]
+- **14:00** [Health] Scheduled dental appointment [[George]]
+
+## Connectors
+- [[SOUL]]
+- [[Athens Move]]
+- [[GitHub]]
+```
+
+### The Obsidian CLI
+
+The skill uses the Obsidian CLI (`obsidian` command) for vault operations:
+
+```bash
+# Read today's daily note
+obsidian daily:read
+
+# Search the vault
+obsidian search --query "Athens"
+
+# Append an event to today's note
+obsidian daily:append --content "- **10:00** [Event] Description [[Link]]"
+```
+
+This provides real-time access to the vault without file system dependencies.
+
+## Token-Optimized Pre-Prompt Hook
+
+The `hooks/obsidian-preprompt.js` runs at every session start to inject context. It solves a critical problem: **daily logs grow indefinitely, causing token inflation**.
+
+### How It Works
+
+| Scenario | Behavior | Tokens Used |
+|----------|----------|-------------|
+| **First session** | Read full daily note, build summary, save state | ~3000 |
+| **No changes** | Return cached snapshot instantly | ~3000 (no processing) |
+| **New content** | Compute delta, prepend "Since you last spoke:" | ~3000 |
+
+The hook maintains `.obsidian-bootstrap-state.json`:
+
 ```json
 {
   "2026-02-16": {
-    "noteHash": "a3f7c2...",
-    "snapshot": "cached content...",
-    "lastLineCount": 45,
+    "noteHash": "a3f7c2d8...",
+    "snapshot": "# Obsidian Daily Log Essence...",
+    "lastLineCount": 52,
     "lastUpdatedIso": "2026-02-16T08:30:00.000Z"
   }
 }
 ```
 
-## Repository Layout
+**Key features:**
+- **SHA256 hashing** — Skip processing if daily note unchanged
+- **Line-based delta** — Only process new lines since last session
+- **Token budgeting** — `estimateTokens() = Math.ceil(chars / 4)`
+- **Obsidian-safe** — Preserves wikilinks `[[...]]`, tags `#tag`, tasks `- [ ]`
 
-```text
-obsidian-life-memory-skill/
-├── SKILL.md
-├── README.md
-├── hooks/
-│   └── obsidian-preprompt.js    # Token-optimized bootstrap hook
-├── scripts/
-│   └── life_memory.py           # CLI helper for vault operations
-└── references/
-    ├── life-patterns.md
-    └── obsidian-cli-notes.md
-```
+## Installation
 
-## Requirements
+### 1. Clone the skill
 
-- Python 3.10+
-- Node.js 18+ (for the pre-prompt hook)
-- Obsidian CLI binary available as `obsidian` in `PATH`
-- Access to an Obsidian vault (default: `~/.openclaw/workspace`)
-
-## Install (Human)
-
-1. Clone into your skills directory:
 ```bash
-git clone https://github.com/georgeantonopoulos/obsidian-life-memory-skill.git ~/.codex/skills/obsidian-life-memory
+git clone https://github.com/georgeantonopoulos/obsidian-life-memory-skill.git \
+  ~/.codex/skills/obsidian-life-memory
 ```
 
-2. Copy the pre-prompt hook to your workspace hooks:
+### 2. Install the pre-prompt hook
+
 ```bash
 cp ~/.codex/skills/obsidian-life-memory/hooks/obsidian-preprompt.js \
    ~/.openclaw/workspace/hooks/obsidian-preprompt.js
 ```
 
-3. Verify the script works:
-```bash
-python3 ~/.codex/skills/obsidian-life-memory/scripts/life_memory.py --help
-```
-
-4. Set your vault path once:
-```bash
-python3 ~/.codex/skills/obsidian-life-memory/scripts/life_memory.py set-vault --vault-path "/path/to/your/vault"
-```
-
-5. Restart your agent runtime so the skill is discoverable.
-
-## Install (Agent)
-
-If your runtime has the `skill-installer` workflow available, install directly from GitHub repo path:
+### 3. Set your vault path
 
 ```bash
-python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
-  --repo georgeantonopoulos/obsidian-life-memory-skill \
-  --path .
+python3 ~/.codex/skills/obsidian-life-memory/scripts/life_memory.py set-vault \
+  --vault-path "/path/to/your/vault"
 ```
 
-Then restart the agent process.
+### 4. Verify CLI access
+
+```bash
+obsidian --version
+python3 ~/.codex/skills/obsidian-life-memory/scripts/life_memory.py show-vault
+```
+
+### 5. Restart your agent
+
+The skill will be discoverable after restart.
 
 ## Usage
 
-### CLI Helper
+### Search and Retrieve
 
 ```bash
-python3 scripts/life_memory.py show-vault
+# Search across all notes
 python3 scripts/life_memory.py search --query "Athens move"
+
+# Read a specific file
 python3 scripts/life_memory.py read --file "Daily/2026-02-15.md"
-python3 scripts/life_memory.py log-event --category "Ops" --event "Published skill" --tags "skills,release"
-python3 scripts/life_memory.py organize            # dry-run
-python3 scripts/life_memory.py organize --apply    # apply changes
+
+# Read via Obsidian CLI (real-time sync)
+obsidian read --file "Projects/Athens Move.md"
+```
+
+### Log Events
+
+```bash
+# Log to today's daily note with wikilinks
+python3 scripts/life_memory.py log-event \
+  --category "Planning" \
+  --event "Viewed apartments in Kolonaki" \
+  --details "Scheduled viewings for Feb 18-19" \
+  --tags "athens,housing"
+```
+
+This creates entries like:
+```markdown
+- **14:30** [Planning] Viewed apartments in Kolonaki — Scheduled viewings for Feb 18-19 #athens #housing [[Athens Move]]
+```
+
+### Organize the Vault
+
+Preview changes (dry-run):
+```bash
+python3 scripts/life_memory.py organize
+```
+
+Apply organization:
+```bash
+python3 scripts/life_memory.py organize --apply
+```
+
+Moves files into taxonomy folders (`Daily/`, `Projects/`, `Archives/`, `Context/`).
+
+### Distill to Long-Term Memory
+
+Promote important facts from daily logs to `[[MEMORY]].md`:
+
+```bash
 python3 scripts/life_memory.py distill --date "2026-02-15"
+```
+
+### Audit Graph Health
+
+```bash
 python3 scripts/life_memory.py audit
 ```
 
-### Pre-Prompt Hook
+Checks for:
+- Orphaned notes (no inbound links)
+- Missing wikilink targets
+- Stale daily notes needing distillation
 
-The hook runs automatically at `agent:bootstrap` and injects `OBSIDIAN_DAILY.md` into context:
-
-1. **First session of the day:** Reads full daily note, builds snapshot, saves to state
-2. **Subsequent sessions:** If note unchanged, returns cached snapshot instantly
-3. **New content added:** Computes delta (new lines), prepends "Since you last spoke:"
-
-**Token Budget:** Configurable via `OBSIDIAN_BOOTSTRAP_TOKEN_BUDGET` env var (default: ~3000 tokens).
-
-## How It Works
-
-### Hook Flow
+## Repository Layout
 
 ```
-agent:bootstrap triggered
-        │
-        ▼
-┌─────────────────┐
-│ Read daily note │ ◄── CLI first, file fallback
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Compute SHA256  │
-└────────┬────────┘
-         │
-         ▼
-    ┌────────────┐
-    │ Hash match │──────► Return cached snapshot (instant)
-    └─────┬──────┘
-          │ No match
-          ▼
-┌─────────────────┐
-│ Build snapshot  │ ◄── Extract wikilinks, tasks, tags
-│ + Delta section │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Persist state   │ ◄── Save hash, snapshot, line count
-└────────┬────────┘
-         │
-         ▼
-   Return snapshot
+obsidian-life-memory-skill/
+├── SKILL.md                           # Agent-facing skill definition
+├── README.md                          # This file
+├── hooks/
+│   └── obsidian-preprompt.js          # Token-optimized bootstrap hook
+├── scripts/
+│   └── life_memory.py                 # CLI helper for vault operations
+└── references/
+    ├── life-patterns.md               # Daily note templates
+    └── obsidian-cli-notes.md          # CLI usage patterns
 ```
 
-### Delta Computation
+## Configuration
 
-The hook tracks `lastLineCount` from the previous session. If new lines are appended:
+### Environment Variables
 
-```
-Previous session: 45 lines
-Current session:  52 lines (7 new)
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `OBSIDIAN_VAULT_PATH` | Root path to Obsidian vault | `process.cwd()` |
+| `OBSIDIAN_BOOTSTRAP_TOKEN_BUDGET` | Max tokens for hook output | 3000 |
 
-Snapshot includes:
----
-## Since you last spoke:
-[new line 46]
-[new line 47]
-...
-[new line 52]
+### State Files
 
----
+- **Vault config:** `~/.local/state/obsidian-life-memory/vault_config.json`
+- **Hook state:** `$OBSIDIAN_VAULT_PATH/.obsidian-bootstrap-state.json`
 
-[full summary within remaining token budget]
-```
+## Requirements
 
-## Notes
-
-- `organize` is dry-run by default to avoid accidental file moves.
-- State is stored at `~/.local/state/obsidian-life-memory/vault_config.json` (or `$XDG_STATE_HOME`).
-- Hook state is stored at `$OBSIDIAN_VAULT_PATH/.obsidian-bootstrap-state.json`.
-- If running as root/headless, the script handles `--no-sandbox` and defaults `DISPLAY=:99`.
+- Python 3.10+
+- Node.js 18+ (for pre-prompt hook)
+- Obsidian CLI (`obsidian` binary in `PATH`)
+- Access to Obsidian vault (local or headless with `DISPLAY=:99`)
 
 ## License
 
