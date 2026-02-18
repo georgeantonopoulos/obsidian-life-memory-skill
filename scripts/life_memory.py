@@ -47,7 +47,8 @@ class ConfigStore:
 @dataclass
 class ObsidianCLI:
     vault_path: Path
-    binary: str = os.environ.get("OBSIDIAN_BIN", "obsidian")
+    # Server-safe default; override with OBSIDIAN_BIN if needed.
+    binary: str = os.environ.get("OBSIDIAN_BIN", "obsidian-cli")
 
     def run(self, command: str, *args: str) -> str:
         cmd = [self.binary, command, *args]
