@@ -8,13 +8,21 @@ const CLI_TIMEOUT_MS = 3000;
 const MAX_SNAPSHOT_CHARS = 12000;
 const MAX_SNAPSHOT_TOKENS = Math.ceil(MAX_SNAPSHOT_CHARS / 4);
 
-// Governance files to read from vault root
+// Core governance files to read from vault root
 const GOVERNANCE_FILES = [
   'SOUL.md',
   'MEMORY.md',
   'AGENTS.md',
   'TOOLS.md',
 ];
+
+// Optional extra context files (instance-specific), configured via env.
+// Example:
+//   OBSIDIAN_OPTIONAL_CONTEXT_FILES="Context/retrieval_policy.md,Context/now.md"
+const OPTIONAL_CONTEXT_FILES = String(process.env.OBSIDIAN_OPTIONAL_CONTEXT_FILES || '')
+  .split(',')
+  .map((v) => v.trim())
+  .filter(Boolean);
 
 // Token budget allocation: governance gets priority
 const GOVERNANCE_TOKEN_BUDGET = Math.floor(MAX_SNAPSHOT_TOKENS * 0.4); // 40% for governance
@@ -179,7 +187,9 @@ function readGovernanceFiles() {
   const vaultRoot = resolveVaultRoot();
   const governance = {};
 
-  for (const filename of GOVERNANCE_FILES) {
+  const filesToRead = [...GOVERNANCE_FILES, ...OPTIONAL_CONTEXT_FILES];
+
+  for (const filename of filesToRead) {
     const filePath = path.join(vaultRoot, filename);
     try {
       if (fs.existsSync(filePath)) {

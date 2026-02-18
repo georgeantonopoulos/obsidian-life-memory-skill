@@ -147,6 +147,34 @@ cp ~/.codex/skills/obsidian-life-memory/hooks/obsidian-preprompt.js \
    ~/.openclaw/workspace/hooks/obsidian-preprompt.js
 ```
 
+### 3. Optional private context overlay (recommended)
+
+Keep personal/instance-specific context out of the shared skill repo.
+
+- Use template files in `templates/Context/` as starting points.
+- Store real private content in your vault (example):
+  - `Context/retrieval_policy.md`
+  - `Context/now.md`
+- Enable optional context loading via env on the hook:
+
+```bash
+OBSIDIAN_OPTIONAL_CONTEXT_FILES="Context/retrieval_policy.md,Context/now.md"
+```
+
+If files are missing, the hook skips them safely.
+
+### 4. Sync canonical repo → live copy safely
+
+Use the included sync script to deploy updates while preserving local/private overrides:
+
+```bash
+bash scripts/sync_live_copy.sh \
+  /root/.openclaw/workspace/obsidian-life-memory-skill/ \
+  /root/.openclaw/workspace/skills/obsidian-life-memory/
+```
+
+The script excludes `.git/`, `local-overrides/`, and `scripts/__pycache__/`.
+
 ### 3. Set your vault path
 
 ```bash
