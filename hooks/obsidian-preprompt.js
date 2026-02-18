@@ -22,7 +22,11 @@ const GOVERNANCE_FILES = [
 const OPTIONAL_CONTEXT_FILES = String(process.env.OBSIDIAN_OPTIONAL_CONTEXT_FILES || '')
   .split(',')
   .map((v) => v.trim())
-  .filter(Boolean);
+  .filter(Boolean)
+  // avoid accidental context explosion / injection via env
+  .slice(0, 20);
+
+const MAX_STATE_DAYS = 14;
 
 // Token budget allocation: governance gets priority
 const GOVERNANCE_TOKEN_BUDGET = Math.floor(MAX_SNAPSHOT_TOKENS * 0.4); // 40% for governance
@@ -86,7 +90,18 @@ function readBootstrapState() {
 
 function writeBootstrapState(state) {
   const statePath = getStateFilePath();
-  fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  const dir = path.dirname(statePath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  // keep cache bounded by recency (prevents unbounded growth)
+  const entries = Object.entries(state || {}).sort((a, b) => String(b[0]).localeCompare(String(a[0])));
+  const trimmed = Object.fromEntries(entries.slice(0, MAX_STATE_DAYS));
+
+  const tmpPath = `${statePath}.tmp`;
+  fs.writeFileSync(tmpPath, `${JSON.stringify(trimmed, null, 2)}\n`, 'utf8');
+  fs.renameSync(tmpPath, statePath);
 }
 
 function computeSha256(text) {
@@ -184,20 +199,24 @@ function readDailyViaFileFallback() {
  * Returns object with file names as keys and content as values
  */
 function readGovernanceFiles() {
-  const vaultRoot = resolveVaultRoot();
+  const vaultRoot = path.resolve(resolveVaultRoot());
   const governance = {};
 
   const filesToRead = [...GOVERNANCE_FILES, ...OPTIONAL_CONTEXT_FILES];
 
   for (const filename of filesToRead) {
-    const filePath = path.join(vaultRoot, filename);
     try {
+      // Resolve and enforce vault-root confinement (prevents path traversal)
+      const filePath = path.resolve(vaultRoot, filename);
+      if (!filePath.startsWith(`${vaultRoot}${path.sep}`) && filePath !== vaultRoot) {
+        continue;
+      }
+
       if (fs.existsSync(filePath)) {
         governance[filename] = fs.readFileSync(filePath, 'utf8');
       }
-    } catch (error) {
+    } catch {
       // Silently skip files that can't be read
-      console.error(`Failed to read governance file ${filename}:`, error.message);
     }
   }
 

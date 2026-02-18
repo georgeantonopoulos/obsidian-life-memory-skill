@@ -1,0 +1,22 @@
+{
+  "name": "obsidian-life-memory",
+  "version": "0.1.0",
+  "description": "One-command setup and maintenance CLI for the Obsidian Life Memory OpenClaw skill",
+  "type": "module",
+  "bin": {
+    "obsidian-life-memory": "bin/obsidian-life-memory.js",
+    "olm": "bin/obsidian-life-memory.js"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "lint": "node -e \"console.log('no lint configured')\""
+  },
+  "keywords": [
+    "openclaw",
+    "obsidian",
+    "skill",
+    "memory",
+    "heartbeat"
+  ],
+  "license": "MIT"
+}

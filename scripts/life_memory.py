@@ -69,7 +69,7 @@ class ObsidianCLI:
             )
         except FileNotFoundError as exc:
             raise LifeMemoryError(
-                "Obsidian CLI not found. Install it and ensure `obsidian` is in PATH."
+                "Obsidian CLI binary not found. Install `obsidian-cli` (or set OBSIDIAN_BIN)."
             ) from exc
 
         if proc.returncode != 0:

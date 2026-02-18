@@ -133,21 +133,43 @@ The hook maintains `.obsidian-bootstrap-state.json`:
 
 ## Installation
 
-### 1. Clone the skill
+### Fast path (recommended): npm CLI wizard
+
+```bash
+npx obsidian-life-memory init
+```
+
+The wizard is explicit and transparent:
+- asks whether to enable **Heartbeat Gardening** (opt-in)
+- previews planned changes before applying
+- writes a rollback snapshot
+- keeps private context local (not in shared repo)
+
+Useful commands:
+
+```bash
+npx obsidian-life-memory doctor
+npx obsidian-life-memory sync
+npx obsidian-life-memory rollback
+```
+
+### Manual path
+
+#### 1. Clone the skill
 
 ```bash
 git clone https://github.com/georgeantonopoulos/obsidian-life-memory-skill.git \
   ~/.codex/skills/obsidian-life-memory
 ```
 
-### 2. Install the pre-prompt hook
+#### 2. Install the pre-prompt hook
 
 ```bash
 cp ~/.codex/skills/obsidian-life-memory/hooks/obsidian-preprompt.js \
    ~/.openclaw/workspace/hooks/obsidian-preprompt.js
 ```
 
-### 3. Optional private context overlay (recommended)
+#### 3. Optional private context overlay (recommended)
 
 Keep personal/instance-specific context out of the shared skill repo.
 
@@ -163,7 +185,7 @@ OBSIDIAN_OPTIONAL_CONTEXT_FILES="Context/retrieval_policy.md,Context/now.md"
 
 If files are missing, the hook skips them safely.
 
-### 4. Sync canonical repo → live copy safely
+#### 4. Sync canonical repo → live copy safely
 
 Use the included sync script to deploy updates while preserving local/private overrides:
 
@@ -174,6 +196,24 @@ bash scripts/sync_live_copy.sh \
 ```
 
 The script excludes `.git/`, `local-overrides/`, and `scripts/__pycache__/`.
+
+## Heartbeat Gardening (optional, user-consented)
+
+If enabled, heartbeat can maintain a lightweight knowledge graph and a fast index.
+
+Typical behavior:
+- reads recent `Daily/YYYY-MM-DD.md`
+- updates/creates nodes under knowledge folders (e.g. `Projects/`, `People/`)
+- maintains `Context/now.md` for fast retrieval
+- never auto-edits governance/system files when configured with safe rules
+
+Recommended defaults:
+- every `30m`
+- active hours `07:00–21:00`
+- timezone set explicitly
+- target `none` (silent unless meaningful)
+
+Use `npx obsidian-life-memory init` to enable this **only after explicit confirmation**.
 
 ### 3. Set your vault path
 
