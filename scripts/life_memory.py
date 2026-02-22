@@ -2,6 +2,8 @@
 """Obsidian Life Memory CLI.
 
 Portable helper for managing a personal memory vault with Obsidian CLI.
+Includes server-safe "ghost mode" file fallback, compact distillation,
+and automatic wikilink weaving for known entities.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, List
 
 DEFAULT_VAULT = Path.home() / ".openclaw" / "workspace"
 DEFAULT_STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "obsidian-life-memory"
@@ -47,7 +49,8 @@ class ConfigStore:
 @dataclass
 class ObsidianCLI:
     vault_path: Path
-    binary: str = os.environ.get("OBSIDIAN_BIN", "obsidian")
+    # Server-safe default; override with OBSIDIAN_BIN if needed.
+    binary: str = os.environ.get("OBSIDIAN_BIN", "obsidian-cli")
 
     def run(self, command: str, *args: str) -> str:
         cmd = [self.binary, command, *args]
@@ -68,13 +71,62 @@ class ObsidianCLI:
                 check=False,
             )
         except FileNotFoundError as exc:
-            raise LifeMemoryError(
-                "Obsidian CLI binary not found. Install `obsidian-cli` (or set OBSIDIAN_BIN)."
-            ) from exc
+            raise LifeMemoryError("Obsidian CLI binary not found. Install `obsidian-cli` (or set OBSIDIAN_BIN).") from exc
 
         if proc.returncode != 0:
             raise LifeMemoryError(proc.stderr.strip() or f"Obsidian command failed: {' '.join(map(shlex.quote, cmd))}")
         return proc.stdout.strip()
+
+
+@dataclass
+class VaultIO:
+    vault: Path
+
+    def _resolve_inside(self, rel: str) -> Path:
+        p = (self.vault / rel).resolve()
+        if not str(p).startswith(str(self.vault.resolve())):
+            raise LifeMemoryError("Path escapes vault")
+        return p
+
+    def read(self, rel: str) -> str:
+        p = self._resolve_inside(rel)
+        if not p.exists() or not p.is_file():
+            raise LifeMemoryError(f"File not found: {rel}")
+        return p.read_text(encoding="utf-8", errors="ignore")
+
+    def today_file(self) -> Path:
+        d = self.vault / "Daily"
+        d.mkdir(parents=True, exist_ok=True)
+        f = d / f"{datetime.now().strftime('%Y-%m-%d')}.md"
+        if not f.exists():
+            f.write_text(f"# {f.stem}\n\n", encoding="utf-8")
+        return f
+
+    def daily_append(self, content: str) -> None:
+        f = self.today_file()
+        with f.open("a", encoding="utf-8") as fh:
+            if not content.startswith("\n"):
+                fh.write("\n")
+            fh.write(content)
+            if not content.endswith("\n"):
+                fh.write("\n")
+
+    def search(self, query: str, limit: int = 200) -> str:
+        pat = re.compile(re.escape(query), re.IGNORECASE)
+        out: list[str] = []
+        for md in self.vault.rglob("*.md"):
+            if "/.obsidian/" in str(md):
+                continue
+            try:
+                txt = md.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            for i, line in enumerate(txt.splitlines(), start=1):
+                if pat.search(line):
+                    out.append(f"{md.relative_to(self.vault)}:{i}:{line}")
+                    if len(out) >= limit:
+                        return "\n".join(out)
+        return "\n".join(out)
 
 
 @dataclass
@@ -149,6 +201,54 @@ def _store_and_vault() -> tuple[ConfigStore, Path]:
     return store, vault_path
 
 
+def _parse_now_entities(vault: Path) -> list[str]:
+    entities: set[str] = set()
+    now_file = vault / "Context" / "now.md"
+    if now_file.exists():
+        text = now_file.read_text(encoding="utf-8", errors="ignore")
+        for m in re.finditer(r"\[\[(?:[^\]|]+\|)?([^\]]+)\]\]", text):
+            label = m.group(1).strip()
+            if label and len(label) > 2:
+                entities.add(label)
+
+    for folder in ["Projects", "People", "Places", "Vendors", "Events"]:
+        d = vault / folder
+        if d.exists():
+            for f in d.glob("*.md"):
+                entities.add(f.stem.replace("-", " ").title())
+
+    return sorted(entities, key=len, reverse=True)
+
+
+def _autoweave(text: str, entities: list[str]) -> str:
+    if not entities:
+        return text
+
+    placeholders: list[str] = []
+
+    def _hold(m: re.Match[str]) -> str:
+        placeholders.append(m.group(0))
+        return f"__WL_{len(placeholders)-1}__"
+
+    tmp = re.sub(r"\[\[[^\]]+\]\]", _hold, text)
+
+    for ent in entities:
+        pat = re.compile(rf"\b({re.escape(ent)})\b", re.IGNORECASE)
+
+        def repl(m: re.Match[str]) -> str:
+            s = m.group(1)
+            if s.startswith("[["):
+                return s
+            return f"[[{s}]]"
+
+        tmp = pat.sub(repl, tmp)
+
+    for i, original in enumerate(placeholders):
+        tmp = tmp.replace(f"__WL_{i}__", original)
+
+    return tmp
+
+
 def cmd_set_vault(args: argparse.Namespace) -> None:
     store = ConfigStore()
     path = Path(args.vault_path).expanduser().resolve()
@@ -163,31 +263,47 @@ def cmd_show_vault(_: argparse.Namespace) -> None:
 
 def cmd_search(args: argparse.Namespace) -> None:
     _, vault = _store_and_vault()
-    cli = ObsidianCLI(vault)
-    print(cli.run("search", f"query={args.query}", "matches"))
+    io = VaultIO(vault)
+    try:
+        cli = ObsidianCLI(vault)
+        print(cli.run("search", f"query={args.query}", "matches"))
+    except LifeMemoryError:
+        print(io.search(args.query))
 
 
 def cmd_read(args: argparse.Namespace) -> None:
     _, vault = _store_and_vault()
-    cli = ObsidianCLI(vault)
+    io = VaultIO(vault)
     if bool(args.file) == bool(args.path):
         raise LifeMemoryError("Provide exactly one of --file or --path.")
-    if args.file:
-        print(cli.run("read", f"file={args.file}"))
-    else:
-        print(cli.run("read", f"path={args.path}"))
+
+    rel = args.file or args.path
+    try:
+        cli = ObsidianCLI(vault)
+        key = "file" if args.file else "path"
+        print(cli.run("read", f"{key}={rel}"))
+    except LifeMemoryError:
+        print(io.read(rel))
 
 
 def cmd_log_event(args: argparse.Namespace) -> None:
     _, vault = _store_and_vault()
-    cli = ObsidianCLI(vault)
+    io = VaultIO(vault)
+
+    entities = _parse_now_entities(vault)
+    event_text = _autoweave(args.event.strip(), entities)
+    details_text = _autoweave(args.details.strip(), entities) if args.details.strip() else ""
 
     timestamp = datetime.now().strftime("%H:%M")
     tags = " ".join(f"#{tag.strip()}" for tag in args.tags.split(",") if tag.strip())
-    details = f": {args.details.strip()}" if args.details.strip() else ""
-    content = f"\n- **{timestamp}** [{args.category}] {args.event}{details} {tags}".rstrip()
+    details = f": {details_text}" if details_text else ""
+    content = f"\n- **{timestamp}** [{args.category}] {event_text}{details} {tags}".rstrip()
 
-    cli.run("daily:append", f"content={content}", "silent")
+    try:
+        cli = ObsidianCLI(vault)
+        cli.run("daily:append", f"content={content}", "silent")
+    except LifeMemoryError:
+        io.daily_append(content)
     print("logged")
 
 
@@ -211,6 +327,37 @@ def _extract_event_lines(text: str) -> List[str]:
     return lines
 
 
+def _compress_events(event_lines: list[str]) -> list[str]:
+    if not event_lines:
+        return []
+
+    keepers: list[str] = []
+    high_signal = re.compile(
+        r"(decision|decided|deadline|due|meeting|appointment|assessment|payment|paid|moved|move|booked|confirm|urgent|call)",
+        re.IGNORECASE,
+    )
+
+    for line in event_lines:
+        if "[[" in line or high_signal.search(line):
+            keepers.append(line)
+
+    if not keepers:
+        keepers = event_lines[:6]
+
+    # dedupe + cap
+    out: list[str] = []
+    seen: set[str] = set()
+    for line in keepers:
+        key = line.strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(line)
+        if len(out) >= 12:
+            break
+    return out
+
+
 def cmd_distill(args: argparse.Namespace) -> None:
     _, vault = _store_and_vault()
     date = args.date
@@ -220,7 +367,8 @@ def cmd_distill(args: argparse.Namespace) -> None:
 
     daily_text = daily_file.read_text(encoding="utf-8")
     event_lines = _extract_event_lines(daily_text)
-    if not event_lines:
+    compact = _compress_events(event_lines)
+    if not compact:
         print("no-events")
         return
 
@@ -229,23 +377,145 @@ def cmd_distill(args: argparse.Namespace) -> None:
         memory_file.write_text("# MEMORY\n\n", encoding="utf-8")
 
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    block = [f"## Distilled {date}", f"- Source: [[Daily/{date}]]", f"- Updated: {stamp}"]
-    block.extend(event_lines)
+    block = [
+        f"## Distilled {date}",
+        f"- Source: [[Daily/{date}]]",
+        f"- Updated: {stamp}",
+        f"- Compression: kept {len(compact)}/{len(event_lines)} high-signal events",
+        "- Highlights:",
+    ]
+    block.extend([f"  {line}" if not line.startswith("  ") else line for line in compact])
     memory_file.write_text(memory_file.read_text(encoding="utf-8") + "\n" + "\n".join(block) + "\n", encoding="utf-8")
-    print(f"distilled {len(event_lines)} events")
+    print(f"distilled {len(compact)} high-signal events")
+
+
+def _extract_all_wikilinks(vault: Path) -> dict:
+    """Extract all wikilinks from markdown files, return {file: [links]}."""
+    wikilink_re = re.compile(r"!?!?\[\[([^\]|]+)(?:\|[^\]]*)?\]\]")
+    links: dict[str, list[str]] = {}
+    for md in vault.rglob("*.md"):
+        if "/.obsidian/" in str(md) or "/.git/" in str(md):
+            continue
+        try:
+            text = md.read_text(encoding="utf-8", errors="ignore")
+            found = wikilink_re.findall(text)
+            if found:
+                links[str(md.relative_to(vault))] = [l.strip() for l in found]
+        except Exception:
+            continue
+    return links
+
+
+def _file_based_audit(vault: Path) -> None:
+    """Perform file-based audit when obsidian-cli is unavailable."""
+    # Collect all markdown files
+    all_files: set[str] = set()
+    for md in vault.rglob("*.md"):
+        if "/.obsidian/" in str(md) or "/.git/" in str(md):
+            continue
+        all_files.add(str(md.relative_to(vault)))
+
+    # Extract wikilinks
+    links = _extract_all_wikilinks(vault)
+
+    # Build link graph
+    inbound: dict[str, set[str]] = {f: set() for f in all_files}
+    outbound: dict[str, set[str]] = {}
+    broken_links: list[tuple[str, str]] = []
+
+    for src, targets in links.items():
+        outbound[src] = set()
+        for target in targets:
+            # Try to resolve the target
+            target_file = target + ".md"
+            target_path = vault / target_file
+            target_alt = vault / (target.replace(" ", "-") + ".md")
+
+            if target_file in all_files:
+                inbound[target_file].add(src)
+                outbound[src].add(target_file)
+            elif target_path.exists():
+                rel = str(target_path.relative_to(vault))
+                inbound[rel].add(src)
+                outbound[src].add(rel)
+            elif target_alt.exists():
+                rel = str(target_alt.relative_to(vault))
+                inbound[rel].add(src)
+                outbound[src].add(rel)
+            else:
+                broken_links.append((src, target))
+
+    # Orphans: files with no inbound links (exclude daily notes and core files)
+    core_files = {"SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md", "README.md"}
+    orphans = [f for f in all_files if not inbound[f] and f not in core_files and not DAILY_RE.match(f)]
+
+    # Dead ends: files with no outbound links
+    deadends = [f for f in all_files if f not in outbound or not outbound[f]]
+
+    # Unlinked dailies: daily notes without links to/from them
+    daily_files = [f for f in all_files if DAILY_RE.match(f)]
+    unlinked_dailies = [f for f in daily_files if not inbound[f] and not outbound.get(f)]
+
+    # Report
+    print("## orphans")
+    if orphans:
+        print(f"Found {len(orphans)} orphaned notes (no inbound links):")
+        for o in sorted(orphans)[:10]:
+            print(f"  - {o}")
+        if len(orphans) > 10:
+            print(f"  ... and {len(orphans) - 10} more")
+    else:
+        print("No orphaned notes found.")
+
+    print("\n## deadends")
+    if deadends:
+        print(f"Found {len(deadends)} dead-end notes (no outbound links):")
+        for d in sorted(deadends)[:10]:
+            print(f"  - {d}")
+        if len(deadends) > 10:
+            print(f"  ... and {len(deadends) - 10} more")
+    else:
+        print("No dead-end notes found.")
+
+    print("\n## unresolved")
+    if broken_links:
+        print(f"Found {len(broken_links)} broken wikilinks:")
+        for src, target in sorted(broken_links)[:10]:
+            print(f"  - {src} -> [[{target}]]")
+        if len(broken_links) > 10:
+            print(f"  ... and {len(broken_links) - 10} more")
+    else:
+        print("No broken wikilinks found.")
+
+    print("\n## daily_health")
+    if unlinked_dailies:
+        print(f"Found {len(unlinked_dailies)} daily notes with no connections:")
+        for d in sorted(unlinked_dailies)[-5:]:  # Show most recent
+            print(f"  - {d}")
+    else:
+        print("All daily notes are linked to the graph.")
+
+    print(f"\n📊 Summary: {len(all_files)} total notes, {len(links)} with wikilinks")
 
 
 def cmd_audit(_: argparse.Namespace) -> None:
     _, vault = _store_and_vault()
     cli = ObsidianCLI(vault)
 
+    obsidian_available = True
     checks = ["unresolved", "orphans", "deadends"]
     for check in checks:
         print(f"## {check}")
         try:
             print(cli.run(check, "total", "verbose"))
         except LifeMemoryError as exc:
-            print(f"{check}: unavailable ({exc})")
+            print(f"{check}: obsidian-cli unavailable ({exc})")
+            obsidian_available = False
+
+    # If obsidian-cli failed, run file-based fallback
+    if not obsidian_available:
+        print("\n🔧 Running file-based audit fallback...\n")
+        _file_based_audit(vault)
 
 
 def build_parser() -> argparse.ArgumentParser:
