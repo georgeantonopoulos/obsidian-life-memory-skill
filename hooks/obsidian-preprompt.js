@@ -19,12 +19,14 @@ const GOVERNANCE_FILES = [
 // Optional extra context files (instance-specific), configured via env.
 // Example:
 //   OBSIDIAN_OPTIONAL_CONTEXT_FILES="Context/retrieval_policy.md,Context/now.md"
-const OPTIONAL_CONTEXT_FILES = String(process.env.OBSIDIAN_OPTIONAL_CONTEXT_FILES || '')
-  .split(',')
-  .map((v) => v.trim())
-  .filter(Boolean)
-  // avoid accidental context explosion / injection via env
-  .slice(0, 20);
+const OPTIONAL_CONTEXT_FILES = [
+  'Context/security_policy.md',
+  'Context/job_routing_policy.md',
+  ...String(process.env.OBSIDIAN_OPTIONAL_CONTEXT_FILES || '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean),
+];
 
 const MAX_STATE_DAYS = 14;
 
