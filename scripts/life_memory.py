@@ -389,17 +389,121 @@ def cmd_distill(args: argparse.Namespace) -> None:
     print(f"distilled {len(compact)} high-signal events")
 
 
+def _get_all_markdown_files(vault: Path) -> List[Path]:
+    """Get all markdown files in vault, excluding hidden folders."""
+    files: List[Path] = []
+    for md in vault.rglob("*.md"):
+        # Skip hidden folders like .git, .obsidian
+        if any(part.startswith(".") for part in md.relative_to(vault).parts):
+            continue
+        files.append(md)
+    return files
+
+
+def _extract_wikilinks(text: str) -> List[str]:
+    """Extract wikilinks from text, handling aliases."""
+    links: List[str] = []
+    # Match [[Page]] or [[Page|Alias]]
+    for m in re.finditer(r"\[\[([^|\]]+)(?:\|[^\]]+)?\]\]", text):
+        link = m.group(1).strip()
+        if link:
+            links.append(link)
+    return links
+
+
+def _resolve_link(link: str, vault: Path) -> Path:
+    """Resolve a wikilink to a potential file path."""
+    # Handle subfolder links like "Projects/athens-move"
+    link_path = link.replace(" ", "-").lower()
+    if "/" in link:
+        return vault / f"{link_path}.md"
+    # Try common folders
+    for folder in ["", "Projects", "People", "Places", "Vendors", "Events", "Daily", "Context", "Identity"]:
+        candidate = vault / folder / f"{link_path}.md"
+        if candidate.exists():
+            return candidate
+    # Default to root
+    return vault / f"{link_path}.md"
+
+
 def cmd_audit(_: argparse.Namespace) -> None:
     _, vault = _store_and_vault()
-    cli = ObsidianCLI(vault)
-
-    checks = ["unresolved", "orphans", "deadends"]
-    for check in checks:
-        print(f"## {check}")
+    
+    if not vault.exists():
+        raise LifeMemoryError(f"Vault does not exist: {vault}")
+    
+    files = _get_all_markdown_files(vault)
+    
+    # Build graph
+    all_links: dict[str, List[str]] = {}
+    all_notes: set[str] = set()
+    link_targets: set[str] = set()
+    
+    for f in files:
+        rel_path = f.relative_to(vault)
+        note_name = rel_path.stem
+        all_notes.add(str(rel_path))
+        
         try:
-            print(cli.run(check, "total", "verbose"))
-        except LifeMemoryError as exc:
-            print(f"{check}: unavailable ({exc})")
+            text = f.read_text(encoding="utf-8", errors="ignore")
+            links = _extract_wikilinks(text)
+            all_links[str(rel_path)] = links
+            for link in links:
+                resolved = _resolve_link(link, vault)
+                link_targets.add(str(resolved.relative_to(vault)))
+        except Exception:
+            all_links[str(rel_path)] = []
+    
+    # orphans: notes not referenced by any other note
+    referenced = set()
+    for source, targets in all_links.items():
+        for link in targets:
+            resolved = _resolve_link(link, vault)
+            try:
+                referenced.add(str(resolved.relative_to(vault)))
+            except ValueError:
+                pass
+    
+    orphans = sorted(all_notes - referenced)
+    
+    # deadends: notes that don't reference any other notes
+    deadends = sorted([f for f in all_notes if not all_links.get(f, [])])
+    
+    # unresolved: links pointing to non-existent files
+    unresolved = []
+    for source, targets in all_links.items():
+        for link in targets:
+            resolved = _resolve_link(link, vault)
+            if not resolved.exists():
+                unresolved.append((source, link))
+    
+    # Output
+    print(f"## orphans ({len(orphans)} notes with no incoming links)")
+    if orphans:
+        for o in orphans[:20]:  # Limit output
+            print(f"  - {o}")
+        if len(orphans) > 20:
+            print(f"  ... and {len(orphans) - 20} more")
+    else:
+        print("  (none found)")
+    
+    print(f"\n## deadends ({len(deadends)} notes with no outgoing links)")
+    if deadends:
+        for d in deadends[:20]:
+            print(f"  - {d}")
+        if len(deadends) > 20:
+            print(f"  ... and {len(deadends) - 20} more")
+    else:
+        print("  (none found)")
+    
+    print(f"\n## unresolved ({len(unresolved)} broken links)")
+    if unresolved:
+        for source, link in unresolved[:20]:
+            print(f"  - {source} -> [[{link}]]")
+        if len(unresolved) > 20:
+            print(f"  ... and {len(unresolved) - 20} more")
+    else:
+        print("  (none found)")
 
 
 def build_parser() -> argparse.ArgumentParser:
