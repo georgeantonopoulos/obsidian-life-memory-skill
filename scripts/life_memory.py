@@ -426,9 +426,9 @@ def _resolve_link(link: str, vault: Path) -> Path:
     return vault / f"{link_path}.md"
 
 
-def cmd_audit(_: argparse.Namespace) -> None:
+def cmd_audit(args: argparse.Namespace) -> None:
     _, vault = _store_and_vault()
-    
+
     if not vault.exists():
         raise LifeMemoryError(f"Vault does not exist: {vault}")
     
@@ -478,6 +478,12 @@ def cmd_audit(_: argparse.Namespace) -> None:
                 unresolved.append((source, link))
     
     # Output
+    if args.summary:
+        # Compact summary mode for cron/monitoring
+        total_notes = len(all_notes)
+        print(f"vault_health: orphans={len(orphans)} deadends={len(deadends)} unresolved={len(unresolved)} total_notes={total_notes}")
+        return
+
     print(f"## orphans ({len(orphans)} notes with no incoming links)")
     if orphans:
         for o in orphans[:20]:  # Limit output
@@ -486,7 +492,7 @@ def cmd_audit(_: argparse.Namespace) -> None:
             print(f"  ... and {len(orphans) - 20} more")
     else:
         print("  (none found)")
-    
+
     print(f"\n## deadends ({len(deadends)} notes with no outgoing links)")
     if deadends:
         for d in deadends[:20]:
@@ -495,7 +501,7 @@ def cmd_audit(_: argparse.Namespace) -> None:
             print(f"  ... and {len(deadends) - 20} more")
     else:
         print("  (none found)")
-    
+
     print(f"\n## unresolved ({len(unresolved)} broken links)")
     if unresolved:
         for source, link in unresolved[:20]:
@@ -542,6 +548,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_distill)
 
     p = sub.add_parser("audit", help="Run graph health checks")
+    p.add_argument("--summary", action="store_true", help="Show compact summary for monitoring")
     p.set_defaults(func=cmd_audit)
 
     return parser
