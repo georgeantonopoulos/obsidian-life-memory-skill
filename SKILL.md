@@ -113,7 +113,7 @@ obsidian-cli orphans total
 obsidian-cli unresolved total
 obsidian-cli deadends total
 ```
-Fix broken wikilinks: `python3 obsidian-life-memory-skill/scripts/fix_deadends.py --apply --limit 60`
+Fix broken wikilinks: `python3 /root/.openclaw/workspace/obsidian-life-memory-skill/scripts/fix_deadends.py --apply --limit 60`
 
 ### 5) Distill daily → long-term (nightly)
 Use the nightly cron (Gemini 3 Flash, 3 AM UK) which runs the 5-phase consolidation prompt.

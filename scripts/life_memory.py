@@ -54,8 +54,6 @@ class ObsidianCLI:
 
     def run(self, command: str, *args: str) -> str:
         cmd = [self.binary, command, *args]
-        if os.geteuid() == 0:
-            cmd.append("--no-sandbox")
 
         env = os.environ.copy()
         if env.get("DISPLAY") is None:
@@ -376,6 +374,18 @@ def cmd_distill(args: argparse.Namespace) -> None:
     if not memory_file.exists():
         memory_file.write_text("# MEMORY\n\n", encoding="utf-8")
 
+    existing_memory = memory_file.read_text(encoding="utf-8")
+    section_header = f"## Distilled {date}"
+    if section_header in existing_memory:
+        # Replace existing section instead of appending a duplicate
+        pattern = re.compile(
+            rf"^{re.escape(section_header)}$.*?(?=^## |\Z)",
+            re.MULTILINE | re.DOTALL,
+        )
+        existing_memory = pattern.sub("", existing_memory).rstrip() + "\n"
+        memory_file.write_text(existing_memory, encoding="utf-8")
+        print(f"replaced existing distill for {date}")
+
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     block = [
         f"## Distilled {date}",
@@ -422,6 +432,12 @@ def _resolve_link(link: str, vault: Path) -> Path:
         candidate = vault / folder / f"{link_path}.md"
         if candidate.exists():
             return candidate
+        # Case-insensitive fallback (catches HEARTBEAT.md, SOUL.md etc.)
+        parent = vault / folder if folder else vault
+        if parent.exists():
+            for f in parent.iterdir():
+                if f.suffix == ".md" and f.stem.lower() == link_path:
+                    return f
     # Default to root
     return vault / f"{link_path}.md"
 

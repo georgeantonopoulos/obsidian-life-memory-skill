@@ -85,17 +85,17 @@ tags: [daily, log]
 
 ### The Obsidian CLI
 
-The skill uses the Obsidian CLI (`obsidian` command) for vault operations:
+The skill uses the Obsidian CLI (`obsidian-cli` command) for vault operations:
 
 ```bash
 # Read today's daily note
-obsidian daily:read
+obsidian-cli daily:read
 
 # Search the vault
-obsidian search --query "project"
+obsidian-cli search query="project"
 
 # Append an event to today's note
-obsidian daily:append --content "- **10:00** [Event] Description [[Link]]"
+obsidian-cli daily:append content="- **10:00** [Event] Description [[Link]]"
 ```
 
 This provides real-time access to the vault without file system dependencies.
@@ -225,7 +225,7 @@ python3 ~/.codex/skills/obsidian-life-memory/scripts/life_memory.py set-vault \
 ### 4. Verify CLI access
 
 ```bash
-obsidian --version
+obsidian-cli --version
 python3 ~/.codex/skills/obsidian-life-memory/scripts/life_memory.py show-vault
 ```
 
@@ -264,7 +264,7 @@ python3 scripts/life_memory.py search --query "project proposal"
 python3 scripts/life_memory.py read --file "Daily/2026-02-15.md"
 
 # Read via Obsidian CLI (real-time sync)
-obsidian read --file "Projects/Project Alpha.md"
+obsidian-cli read file="Projects/Project Alpha.md"
 ```
 
 ### Log Events

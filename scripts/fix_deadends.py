@@ -148,7 +148,7 @@ def ask_moonshot(link: str, context: str, source: str, api_key: str) -> Tuple[st
             data = json.loads(resp.read())
             content = data["choices"][0]["message"]["content"].strip()
     except Exception as e:
-        return "REMOVE", f"API error ({e})"
+        return "SKIP", f"API error: {e}"
 
     decision, reason = "REMOVE", "no reason given"
     for line in content.splitlines():
@@ -224,7 +224,7 @@ def main():
           f"across {len(broken)} unique links\n")
 
     to_process = list(broken.items())[:args.limit]
-    created = removed = errors = 0
+    created = removed = skipped = errors = 0
     verdicts: list[tuple[str, str, str, str]] = []   # link, source, decision, reason
 
     for i, (link, occurrences) in enumerate(to_process, 1):
@@ -237,7 +237,10 @@ def main():
         print(f"         → {decision}: {reason}")
 
         if not dry_run:
-            if decision == "CREATE":
+            if decision == "SKIP":
+                print(f"         ⏭️  skipped: {reason}")
+                continue
+            elif decision == "CREATE":
                 try:
                     p = create_stub(link, vault, primary_source, reason)
                     print(f"         ✅ stub → {p.relative_to(vault)}")
@@ -268,14 +271,16 @@ def main():
     create_n = sum(1 for _, _, d, _ in verdicts if d == "CREATE")
     remove_n = sum(1 for _, _, d, _ in verdicts if d == "REMOVE")
 
+    skip_n  = sum(1 for _, _, d, _ in verdicts if d == "SKIP")
+
     if dry_run:
-        print(f"DRY RUN: would CREATE {create_n} stubs, REMOVE {remove_n} links")
+        print(f"DRY RUN: would CREATE {create_n} stubs, REMOVE {remove_n} links, SKIP {skip_n}")
         print("\nFull verdict list:")
         for link, src, dec, reason in verdicts:
             print(f"  {'✅ CREATE' if dec=='CREATE' else '🗑️  REMOVE'}  [[{link}]]  — {reason}")
         print("\nRun with --apply to execute.")
     else:
-        print(f"Done: {created} stubs created · {removed} links removed · {errors} errors")
+        print(f"Done: {created} stubs created · {removed} links removed · {skipped} skipped · {errors} errors")
         try:
             result = subprocess.run(
                 ["python3", str(Path(__file__).parent / "life_memory.py"), "audit", "--summary"],
