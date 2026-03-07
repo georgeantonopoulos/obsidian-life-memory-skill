@@ -1,0 +1,330 @@
+#!/usr/bin/env bash
+# obsidian-cli — direct vault file I/O for OpenClaw agents
+# Vault: /root/.openclaw/workspace
+# Supports: read, append, create, list, move, delete, edit,
+#           daily:read, daily:append, daily:create,
+#           search, search-content, print-default, status
+
+set -euo pipefail
+
+VAULT="/root/.openclaw/workspace"
+DAILY_DIR="$VAULT/memory"
+
+TODAY=$(date -u +%Y-%m-%d)
+DAILY_FILE="$DAILY_DIR/$TODAY.md"
+
+cmd="${1:-}"
+shift || true
+
+# ---------------------------------------------------------------------------
+# Parse key=value args into associative array
+# ---------------------------------------------------------------------------
+declare -A ARGS
+for arg in "$@"; do
+  key="${arg%%=*}"
+  val="${arg#*=}"
+  val="${val%\"}"
+  val="${val#\"}"
+  val="${val%\'}"
+  val="${val#\'}"
+  ARGS["$key"]="$val"
+done
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+resolve_path() {
+  local p="${ARGS[path]:-}"
+  if [[ "$p" != /* ]]; then
+    p="$VAULT/$p"
+  fi
+  echo "$p"
+}
+
+# Ensure file ends with a newline before appending (prevents content merging)
+ensure_trailing_newline() {
+  local f="$1"
+  if [[ -s "$f" ]] && [[ "$(tail -c1 "$f" | wc -l)" -eq 0 ]]; then
+    echo "" >> "$f"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+case "$cmd" in
+
+  # ── read ──────────────────────────────────────────────────────────────────
+  read)
+    FILE=$(resolve_path)
+    if [[ ! -f "$FILE" ]]; then
+      echo "obsidian-cli: file not found: $FILE" >&2
+      exit 1
+    fi
+    cat "$FILE"
+    ;;
+
+  # ── append ────────────────────────────────────────────────────────────────
+  # Interprets \n, \t escape sequences in content (use printf %b).
+  # Adds a leading blank line so appended blocks are visually separated.
+  append)
+    FILE=$(resolve_path)
+    CONTENT="${ARGS[content]:-}"
+    if [[ ! -f "$FILE" ]]; then
+      mkdir -p "$(dirname "$FILE")"
+      touch "$FILE"
+    fi
+    ensure_trailing_newline "$FILE"
+    printf '%b\n' "$CONTENT" >> "$FILE"
+    ;;
+
+  # ── create ────────────────────────────────────────────────────────────────
+  # Overwrites by default. Pass force=true to skip the guard (same behaviour,
+  # explicit intent). Without force=true and when the file already exists,
+  # the command exits with an error.
+  create)
+    FILE=$(resolve_path)
+    CONTENT="${ARGS[content]:-}"
+    FORCE="${ARGS[force]:-false}"
+    if [[ -f "$FILE" && "$FORCE" != "true" ]]; then
+      echo "obsidian-cli: file already exists: $FILE (pass force=true to overwrite)" >&2
+      exit 1
+    fi
+    mkdir -p "$(dirname "$FILE")"
+    printf '%b\n' "$CONTENT" > "$FILE"
+    ;;
+
+  # ── list ──────────────────────────────────────────────────────────────────
+  # List .md files in a folder (relative to vault root).
+  # Usage: obsidian-cli list folder="People"
+  #        obsidian-cli list folder="."  (vault root)
+  list)
+    FOLDER="${ARGS[folder]:-${ARGS[path]:-}}"
+    if [[ -z "$FOLDER" ]]; then
+      echo "obsidian-cli: list requires folder=<path>" >&2
+      exit 1
+    fi
+    TARGET="$VAULT/$FOLDER"
+    if [[ ! -d "$TARGET" ]]; then
+      echo "obsidian-cli: folder not found: $TARGET" >&2
+      exit 1
+    fi
+    find "$TARGET" -maxdepth 1 -name "*.md" | sort | while read -r f; do
+      echo "${f#$VAULT/}"
+    done
+    ;;
+
+  # ── move ──────────────────────────────────────────────────────────────────
+  # Move/rename a note and update [[wikilinks]] across the vault.
+  # Usage: obsidian-cli move path="old/note.md" to="new/note.md"
+  move)
+    SRC_REL="${ARGS[path]:-}"
+    DST_REL="${ARGS[to]:-}"
+    if [[ -z "$SRC_REL" || -z "$DST_REL" ]]; then
+      echo "obsidian-cli: move requires path=<src> to=<dst>" >&2
+      exit 1
+    fi
+    SRC="$VAULT/$SRC_REL"
+    DST="$VAULT/$DST_REL"
+    if [[ ! -f "$SRC" ]]; then
+      echo "obsidian-cli: source not found: $SRC" >&2
+      exit 1
+    fi
+    if [[ -f "$DST" ]]; then
+      echo "obsidian-cli: destination already exists: $DST" >&2
+      exit 1
+    fi
+    mkdir -p "$(dirname "$DST")"
+    mv "$SRC" "$DST"
+
+    # Update [[wikilinks]] and markdown links referencing old name
+    OLD_STEM=$(basename "$SRC_REL" .md)
+    NEW_STEM=$(basename "$DST_REL" .md)
+    OLD_REL="${SRC_REL%.md}"
+    NEW_REL="${DST_REL%.md}"
+
+    # Only update if names differ (not just a folder move with same filename)
+    if [[ "$OLD_STEM" != "$NEW_STEM" ]]; then
+      find "$VAULT" -name "*.md" ! -path "*/node_modules/*" ! -path "*/.git/*" | while read -r f; do
+        # [[OldName]] → [[NewName]]
+        sed -i "s|\[\[$OLD_STEM\]\]|[[$NEW_STEM]]|g" "$f"
+        # [[OldName|alias]] → [[NewName|alias]]
+        sed -i "s|\[\[$OLD_STEM||\[\[$NEW_STEM||g" "$f"
+        # [text](old/path.md) → [text](new/path.md)
+        sed -i "s|(${OLD_REL}.md)|(${NEW_REL}.md)|g" "$f"
+      done
+      echo "Moved and updated [[${OLD_STEM}]] → [[${NEW_STEM}]] across vault"
+    else
+      echo "Moved: $SRC_REL → $DST_REL (filename unchanged, no wikilink update needed)"
+    fi
+    ;;
+
+  # ── delete ────────────────────────────────────────────────────────────────
+  # Usage: obsidian-cli delete path="junk.md"
+  delete)
+    FILE=$(resolve_path)
+    if [[ ! -f "$FILE" ]]; then
+      echo "obsidian-cli: file not found: $FILE" >&2
+      exit 1
+    fi
+    rm "$FILE"
+    echo "Deleted: $FILE"
+    ;;
+
+  # ── edit (find & replace) ─────────────────────────────────────────────────
+  # Replace the first occurrence of a pattern within a note.
+  # Usage: obsidian-cli edit path="MEMORY.md" find="old text" replace="new text"
+  # Add regex=true to treat find= as an extended regex.
+  edit)
+    FILE=$(resolve_path)
+    FIND="${ARGS[find]:-}"
+    REPLACE="${ARGS[replace]:-}"
+    REGEX="${ARGS[regex]:-false}"
+    if [[ ! -f "$FILE" ]]; then
+      echo "obsidian-cli: file not found: $FILE" >&2
+      exit 1
+    fi
+    if [[ -z "$FIND" ]]; then
+      echo "obsidian-cli: edit requires find=<pattern>" >&2
+      exit 1
+    fi
+    if [[ "$REGEX" == "true" ]]; then
+      sed -i "s|${FIND}|${REPLACE}|" "$FILE"
+    else
+      # Escape special regex chars in FIND for literal match
+      ESCAPED_FIND=$(printf '%s' "$FIND" | sed 's/[[\.*^$()+?{|]/\\&/g')
+      ESCAPED_REPLACE=$(printf '%s' "$REPLACE" | sed 's/[&/\]/\\&/g')
+      sed -i "s|${ESCAPED_FIND}|${ESCAPED_REPLACE}|" "$FILE"
+    fi
+    echo "Edited: $FILE"
+    ;;
+
+  # ── daily:read ────────────────────────────────────────────────────────────
+  daily:read)
+    if [[ ! -f "$DAILY_FILE" ]]; then
+      echo "obsidian-cli: no daily note for $TODAY" >&2
+      exit 1
+    fi
+    cat "$DAILY_FILE"
+    ;;
+
+  # ── daily:append ──────────────────────────────────────────────────────────
+  daily:append)
+    CONTENT="${ARGS[content]:-}"
+    mkdir -p "$DAILY_DIR"
+    if [[ ! -f "$DAILY_FILE" ]]; then
+      printf '# Daily Note — %s\n\n' "$TODAY" > "$DAILY_FILE"
+    fi
+    ensure_trailing_newline "$DAILY_FILE"
+    printf '%b\n' "$CONTENT" >> "$DAILY_FILE"
+    ;;
+
+  # ── daily:create ──────────────────────────────────────────────────────────
+  daily:create)
+    CONTENT="${ARGS[content]:-}"
+    mkdir -p "$DAILY_DIR"
+    printf '%b\n' "$CONTENT" > "$DAILY_FILE"
+    ;;
+
+  # ── search ────────────────────────────────────────────────────────────────
+  # Search by note filename.
+  search)
+    QUERY="${ARGS[query]:-${1:-}}"
+    MAX="${ARGS[max]:-10}"
+    find "$VAULT" -name "*.md" \
+      ! -path "*/node_modules/*" \
+      ! -path "*/.git/*" \
+      ! -path "*/venv/*" | while read -r f; do
+      base=$(basename "$f" .md)
+      if echo "$base" | grep -qi "$QUERY"; then
+        echo "${f#$VAULT/}"
+      fi
+    done | head -"$MAX"
+    ;;
+
+  # ── search-content ────────────────────────────────────────────────────────
+  # Full-text search with surrounding context lines.
+  search-content)
+    QUERY="${ARGS[query]:-${1:-}}"
+    MAX="${ARGS[max]:-8}"
+    CONTEXT="${ARGS[context]:-3}"
+    TMPF=$(mktemp)
+    grep -ril "$QUERY" "$VAULT" --include="*.md" > "$TMPF" 2>/dev/null || true
+    if [[ -s "$TMPF" ]]; then
+      TMPF2=$(mktemp)
+      grep -v -E 'node_modules|_env/|venv/|/\.git/' "$TMPF" > "$TMPF2" 2>/dev/null || true
+      mv "$TMPF2" "$TMPF"
+    fi
+    if [[ ! -s "$TMPF" ]]; then
+      rm -f "$TMPF"
+      exit 0
+    fi
+    COUNT=0
+    while IFS= read -r f; do
+      [[ -z "$f" ]] && continue
+      [[ $COUNT -ge $MAX ]] && break
+      REL="${f#$VAULT/}"
+      echo "**${REL}:**"
+      grep -i -B1 -A"$CONTEXT" "$QUERY" "$f" 2>/dev/null | head -25 || true
+      echo ""
+      COUNT=$((COUNT + 1))
+    done < "$TMPF"
+    rm -f "$TMPF"
+    ;;
+
+  # ── print-default ─────────────────────────────────────────────────────────
+  print-default)
+    if [[ "${ARGS[--path-only]:-}" == "true" ]] || printf '%s\n' "$@" | grep -q -- "--path-only"; then
+      echo "$VAULT"
+    else
+      echo "workspace ($VAULT)"
+    fi
+    ;;
+
+  # ── set-default ───────────────────────────────────────────────────────────
+  set-default)
+    echo "obsidian-cli: set-default is a no-op (vault is hardcoded to $VAULT)" >&2
+    ;;
+
+  # ── status ────────────────────────────────────────────────────────────────
+  status)
+    echo "Vault:  $VAULT"
+    echo "Today:  $TODAY"
+    echo "Daily:  $DAILY_FILE"
+    echo ""
+    echo "Root notes:"
+    ls "$VAULT"/*.md 2>/dev/null | while read -r f; do echo "  ${f#$VAULT/}"; done || echo "  (none)"
+    echo ""
+    echo "Folders:"
+    find "$VAULT" -mindepth 1 -maxdepth 1 -type d \
+      ! -name ".*" ! -name "node_modules" ! -name "venv" | sort | while read -r d; do
+      COUNT=$(find "$d" -name "*.md" | wc -l)
+      echo "  $(basename "$d")/ ($COUNT notes)"
+    done
+    ;;
+
+  # ── unknown ───────────────────────────────────────────────────────────────
+  *)
+    echo "obsidian-cli: unknown command: $cmd" >&2
+    cat >&2 <<'USAGE'
+Usage: obsidian-cli <command> [key=value ...]
+
+Commands:
+  read              path=<file>                       Read a note
+  append            path=<file> content=<text>        Append to a note (\n interpreted)
+  create            path=<file> content=<text>        Create/overwrite a note (force=true to overwrite)
+  list              folder=<dir>                      List .md files in a folder
+  move              path=<src> to=<dst>               Move note + update [[wikilinks]]
+  delete            path=<file>                       Delete a note
+  edit              path=<file> find=<x> replace=<y> Find & replace in a note (regex=true for regex)
+  daily:read                                          Read today's daily note
+  daily:append      content=<text>                    Append to today's daily note
+  daily:create      content=<text>                    Create/overwrite today's daily note
+  search            query=<q>                         Search by filename
+  search-content    query=<q>                         Full-text search with context
+  print-default     [--path-only]                     Print vault path
+  status                                              Show vault overview
+USAGE
+    exit 1
+    ;;
+esac

@@ -9,91 +9,83 @@ Use this skill when the user wants persistent personal memory in an Obsidian vau
 
 ## Core Rules
 
-- Use the native `obsidian-cli` wrapper for all note operations — it talks directly to the running Obsidian 1.12.4 (Catalyst) instance.
+- Use `obsidian-cli` for **all** note operations — never raw file tools on vault files.
 - Read before writing: retrieve recent context first when the request depends on prior facts or decisions.
-- Keep edits reversible: run organization in dry-run mode first, then apply.
+- Keep edits reversible: prefer `append` or `edit` over full `create` overwrites.
 - Preserve privacy: do not publish or exfiltrate vault content unless explicitly requested.
 
 ## CLI Setup
 
-The `obsidian-cli` wrapper at `/usr/local/bin/obsidian-cli` invokes the native Obsidian CLI:
-- Obsidian runs headless via `systemd` service `obsidian-headless`
-- `DISPLAY=:99` (Xvfb), `--no-sandbox` (root), `--user-data-dir=/tmp/.config/obsidian`
-- Config with `"cli":true` at `/root/.config/obsidian/obsidian.json` (auto-copied to user-data-dir on each call)
-
-If the service is not running: `systemctl start obsidian-headless && sleep 8`
+The `obsidian-cli` wrapper lives at `/usr/local/bin/obsidian-cli` (bash script, no external deps).
+- Vault is hardcoded to `/root/.openclaw/workspace`
+- Daily notes live in `memory/YYYY-MM-DD.md`
+- Source: `bin/obsidian-cli` in this skill repo
 
 ## Essential Commands
 
-### Vault info
-```bash
-obsidian-cli vault                          # name, path, file/folder counts, size
-obsidian-cli files total                    # total file count
-obsidian-cli folders                        # list all folders
-```
-
 ### Reading notes
 ```bash
-obsidian-cli read path="Daily/2026-02-27.md"
-obsidian-cli daily:read                     # read today's daily note
-obsidian-cli search query="Athens move"     # full-text search
-obsidian-cli search:context query="Moraitis" # search with surrounding lines
+obsidian-cli read path="MEMORY.md"
+obsidian-cli read path="People/george.md"
+obsidian-cli daily:read                        # today's daily note
 ```
 
-### Writing notes
+### Writing & editing notes
 ```bash
+# Append — \n and \t are interpreted (printf %b)
 obsidian-cli daily:append content="## 14:30 UTC\n- Thing happened"
-obsidian-cli append path="MEMORY.md" content="New fact"
-obsidian-cli prepend path="Projects/athens.md" content="# Update"
-obsidian-cli create path="People/carla.md" content="# Carla Corbisiero\nMortgage broker"
-obsidian-cli create path="Daily/2026-02-27.md" template="Daily Note"
+obsidian-cli append path="MEMORY.md" content="\n## New section\n- fact"
+
+# Create — errors if file exists (use force=true to overwrite)
+obsidian-cli create path="People/carla.md" content="# Carla\nMortgage broker"
+obsidian-cli create path="People/carla.md" content="# Updated" force=true
+
+# Daily create/overwrite
+obsidian-cli daily:create content="# Daily Note — $(date -u +%Y-%m-%d)\n\n"
+
+# Find & replace within a note
+obsidian-cli edit path="MEMORY.md" find="🟡 PENDING" replace="✅ DONE"
+obsidian-cli edit path="MEMORY.md" find="status: (open)" replace="status: closed" regex=true
 ```
 
-### Graph health
+### Browsing the vault
 ```bash
-obsidian-cli orphans total                  # files with no incoming links
-obsidian-cli orphans                        # list orphan files
-obsidian-cli deadends total                 # files with no outgoing links
-obsidian-cli unresolved total               # count of broken [[wikilinks]]
-obsidian-cli unresolved verbose             # list with source files
+obsidian-cli list folder="People"              # list .md files in a folder
+obsidian-cli list folder="Projects"
+obsidian-cli list folder="."                   # vault root
+obsidian-cli status                            # vault overview + folder counts
 ```
 
-### Tags & properties
+### Moving & deleting
 ```bash
-obsidian-cli tags counts sort=count         # tag frequency
-obsidian-cli properties                     # all frontmatter properties
-obsidian-cli property:set name="status" value="done" path="Projects/foo.md"
+# Move + updates [[wikilinks]] across the vault when filename changes
+obsidian-cli move path="old/note.md" to="new/note.md"
+
+# Delete
+obsidian-cli delete path="Archive/stale.md"
 ```
 
-### Tasks
+### Searching
 ```bash
-obsidian-cli tasks todo                     # all incomplete tasks in vault
-obsidian-cli tasks done                     # completed tasks
-obsidian-cli task path="MEMORY.md" line=12 toggle  # toggle a specific task
+obsidian-cli search query="Athens"             # search by filename
+obsidian-cli search-content query="Moraitis"   # full-text with context lines
+obsidian-cli search-content query="lease" max=5 context=5
 ```
 
-### Files & navigation
+### Vault path
 ```bash
-obsidian-cli files folder="Projects"        # list files in folder
-obsidian-cli move path="old.md" to="Archive/old.md"
-obsidian-cli delete path="junk.md"
-obsidian-cli rename path="note.md" name="better-name.md"
-```
-
-### Plugins & commands
-```bash
-obsidian-cli plugins                        # list all plugins
-obsidian-cli commands filter="dataview"     # find command IDs
-obsidian-cli command id="dataview:..."      # execute a command
-obsidian-cli eval code="return app.vault.getName()"  # arbitrary JS
+obsidian-cli print-default                     # workspace (/path/to/vault)
+obsidian-cli print-default --path-only         # /path/to/vault
 ```
 
 ## Workflow
 
-### 1) Read context before writing
+### 1) Session startup
 ```bash
+obsidian-cli read path="SOUL.md"
+obsidian-cli read path="USER.md"
 obsidian-cli daily:read
-obsidian-cli search query="<topic>"
+obsidian-cli read path="MEMORY.md"   # main sessions only
 ```
 
 ### 2) Log events
@@ -101,27 +93,31 @@ obsidian-cli search query="<topic>"
 obsidian-cli daily:append content="## $(date -u +%H:%M) UTC\n- <event>"
 ```
 
-### 3) Create/update long-term notes
+### 3) Update long-term notes
 ```bash
-obsidian-cli read path="MEMORY.md"
 obsidian-cli append path="MEMORY.md" content="\n## New section\n- fact"
+# or targeted edit:
+obsidian-cli edit path="MEMORY.md" find="old status" replace="new status"
 ```
 
-### 4) Vault health audit
+### 4) Maintain knowledge graph
 ```bash
-obsidian-cli orphans total
-obsidian-cli unresolved total
-obsidian-cli deadends total
+obsidian-cli list folder="People"              # check coverage
+obsidian-cli search-content query="[[Person]]" # find references
+obsidian-cli move path="People/old.md" to="People/correct-name.md"
 ```
-Fix broken wikilinks: `python3 /root/.openclaw/workspace/obsidian-life-memory-skill/scripts/fix_deadends.py --apply --limit 60`
 
-### 5) Distill daily → long-term (nightly)
-Use the nightly cron (Gemini 3 Flash, 3 AM UK) which runs the 5-phase consolidation prompt.
+## Note on `\n` in content
+
+All write commands (`append`, `create`, `daily:append`, `daily:create`) use `printf '%b'` internally, which interprets:
+- `\n` → newline
+- `\t` → tab
+
+So pass multi-line content as: `content="## Heading\n- item one\n- item two"`
 
 ## Resources
 
-- Wrapper: `/usr/local/bin/obsidian-cli`
-- Fix deadends script: `scripts/fix_deadends.py`
-- Obsidian headless service: `systemctl status obsidian-headless`
+- CLI binary: `/usr/local/bin/obsidian-cli`
+- Source: `bin/obsidian-cli` (this repo)
 - Vault path: `/root/.openclaw/workspace`
-- Vault ID: `c8736eac4e90066e`
+- Daily notes: `/root/.openclaw/workspace/memory/YYYY-MM-DD.md`
