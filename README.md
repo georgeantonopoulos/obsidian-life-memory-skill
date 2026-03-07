@@ -26,13 +26,15 @@ cp bin/obsidian-cli /usr/local/bin/obsidian-cli
 chmod +x /usr/local/bin/obsidian-cli
 ```
 
+Then set your vault path in the script (edit the `VAULT=` line at the top).
+
 ### Command Reference
 
 #### Reading
 
 ```bash
 obsidian-cli read path="MEMORY.md"
-obsidian-cli read path="People/george.md"
+obsidian-cli read path="People/alice.md"
 obsidian-cli daily:read                         # today's daily note
 ```
 
@@ -42,12 +44,12 @@ obsidian-cli daily:read                         # today's daily note
 
 ```bash
 # Append — adds content with a leading newline for clean separation
-obsidian-cli daily:append content="## 14:30 UTC\n- Thing happened"
-obsidian-cli append path="MEMORY.md" content="\n## New section\n- fact"
+obsidian-cli daily:append content="## 14:30 UTC\n- Meeting with client went well"
+obsidian-cli append path="MEMORY.md" content="\n## New section\n- important fact"
 
 # Create — errors if file exists to prevent accidents
-obsidian-cli create path="People/alice.md" content="# Alice\nEngineer"
-obsidian-cli create path="People/alice.md" content="# Alice\nUpdated" force=true
+obsidian-cli create path="People/alice.md" content="# Alice\nEngineer at Acme Corp"
+obsidian-cli create path="People/alice.md" content="# Alice\nUpdated bio" force=true
 
 # Daily create/overwrite
 obsidian-cli daily:create content="# Daily Note — $(date -u +%Y-%m-%d)\n\n"
@@ -55,7 +57,7 @@ obsidian-cli daily:create content="# Daily Note — $(date -u +%Y-%m-%d)\n\n"
 # Find & replace within a note
 obsidian-cli edit path="MEMORY.md" find="🟡 PENDING" replace="✅ DONE"
 # Regex mode:
-obsidian-cli edit path="MEMORY.md" find="status: (open)" replace="status: closed" regex=true
+obsidian-cli edit path="Projects/alpha.md" find="status: (open|pending)" replace="status: closed" regex=true
 ```
 
 #### Browsing
@@ -71,17 +73,17 @@ obsidian-cli status                             # vault overview + folder counts
 
 ```bash
 # move: renames file AND updates [[wikilinks]] across the entire vault
-obsidian-cli move path="old/note.md" to="new/note.md"
+obsidian-cli move path="People/old-name.md" to="People/correct-name.md"
 
-obsidian-cli delete path="Archive/stale.md"
+obsidian-cli delete path="Archive/stale-note.md"
 ```
 
 #### Searching
 
 ```bash
-obsidian-cli search query="Athens"              # search by filename
-obsidian-cli search-content query="Moraitis"    # full-text with context lines
-obsidian-cli search-content query="lease" max=5 context=5
+obsidian-cli search query="project"             # search by filename
+obsidian-cli search-content query="invoice"     # full-text with context lines
+obsidian-cli search-content query="meeting" max=5 context=5
 ```
 
 #### Vault info
@@ -110,13 +112,13 @@ workspace/
 │   └── 2026-03-07.md
 │
 ├── People/                  # Real people the human interacts with
-│   └── george.md
+│   └── alice.md
 │
 ├── Projects/                # Active projects with backlinks
-│   └── athens-move.md
+│   └── project-alpha.md
 │
 ├── Places/                  # Real locations
-│   └── athens.md
+│   └── city.md
 │
 └── Archives/                # Completed/cold projects
 ```
