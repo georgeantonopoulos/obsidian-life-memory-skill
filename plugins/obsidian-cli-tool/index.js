@@ -54,6 +54,13 @@ export default function register(api) {
     return { content: [{ type: 'text', text: r.text }], details: r.details };
   });
 
+  reg(api, 'obsidian_edit', 'Find and replace text within a vault note.', {
+    type: 'object', additionalProperties: false, properties: { path: { type: 'string' }, find: { type: 'string' }, replace: { type: 'string' }, regex: { type: 'boolean' } }, required: ['path','find','replace']
+  }, async ({ path, find, replace, regex }) => {
+    const r = await run(api, 'edit', { path, find, replace, ...(regex ? { regex: 'true' } : {}) });
+    return { content: [{ type: 'text', text: r.text }], details: r.details };
+  });
+
   reg(api, 'obsidian_append', 'Append text to a note in the Obsidian vault.', {
     type: 'object', additionalProperties: false, properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path','content']
   }, async ({ path, content }) => {
