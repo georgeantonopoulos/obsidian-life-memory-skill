@@ -197,8 +197,8 @@ function readDailyViaFileFallback() {
 }
 
 /**
- * Read governance files from vault root
- * Returns object with file names as keys and content as values
+ * Read governance files from vault root via obsidian-cli first.
+ * Falls back to direct fs reads only if the CLI read fails.
  */
 function readGovernanceFiles() {
   const vaultRoot = path.resolve(resolveVaultRoot());
@@ -208,10 +208,22 @@ function readGovernanceFiles() {
 
   for (const filename of filesToRead) {
     try {
-      // Resolve and enforce vault-root confinement (prevents path traversal)
       const filePath = path.resolve(vaultRoot, filename);
       if (!filePath.startsWith(`${vaultRoot}${path.sep}`) && filePath !== vaultRoot) {
         continue;
+      }
+
+      try {
+        const cliOut = execSync(`DISPLAY=:99 /usr/local/bin/obsidian-cli read path=${JSON.stringify(filename)}`, {
+          encoding: 'utf8',
+          timeout: CLI_TIMEOUT_MS,
+        });
+        if (cliOut && cliOut.trim()) {
+          governance[filename] = cliOut;
+          continue;
+        }
+      } catch {
+        // fall back below
       }
 
       if (fs.existsSync(filePath)) {
