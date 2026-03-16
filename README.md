@@ -221,8 +221,8 @@ MIT
 - retrieval intentionally prefers small snippets over full-note dumps
 - the hook avoids governance/system-file mutation and never writes by itself
 
-### Example prompts validated
-- `what's the status of the Barclays loan?`
-- `Actually the Moraitis fee was paid today`
-- `what do I need to do tomorrow?`
-- `draft a message to Megan`
+### Example prompt categories validated
+- status lookup for a named project / financial item
+- factual correction or update message
+- near-term planning query (for example, asking what needs doing next)
+- drafting a message to a known contact
