@@ -191,3 +191,10 @@ obsidian-life-memory-skill/
 ## License
 
 MIT
+
+
+## Prompt hook split
+
+- `hooks/obsidian-preprompt.js` now supports both session-start orientation and real `before_prompt_build` targeted retrieval.
+- Session start injects bounded governance + daily/open-items orientation.
+- Normal turns inject cheap targeted snippets plus write-target hints only; no automatic vault writes are performed.
