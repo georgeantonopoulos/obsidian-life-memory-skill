@@ -195,6 +195,34 @@ MIT
 
 ## Prompt hook split
 
-- `hooks/obsidian-preprompt.js` now supports both session-start orientation and real `before_prompt_build` targeted retrieval.
-- Session start injects bounded governance + daily/open-items orientation.
-- Normal turns inject cheap targeted snippets plus write-target hints only; no automatic vault writes are performed.
+`hooks/obsidian-preprompt.js` now handles **two distinct prompt-injection paths**:
+
+### 1) Session start (`agent:bootstrap`)
+- injects bounded orientation context once per session
+- includes governance files plus a daily/open-items snapshot
+- optimized for startup orientation, not message-specific recall
+
+### 2) Per-turn retrieval (`before_prompt_build`)
+- runs on every normal prompt
+- derives **1–3 focused retrieval queries** from the current user message
+- retrieves a **small bounded set of snippets** from the vault
+- injects those snippets as targeted context for the current turn
+- if the prompt looks like a correction/update, it also injects **possible write targets / edit hints**
+- **does not auto-write** to the vault
+
+### Design goals
+- keep session-start orientation broad but bounded
+- keep per-turn retrieval cheap and prompt-targeted
+- separate retrieval from mutation
+- let the assistant explicitly decide whether to call `obsidian_edit`, `obsidian_append`, or `obsidian_create` later
+
+### Current limitations
+- ranking is heuristic and still stronger on entity/status prompts than on fuzzy date-heavy prompts like “what do I need to do tomorrow?”
+- retrieval intentionally prefers small snippets over full-note dumps
+- the hook avoids governance/system-file mutation and never writes by itself
+
+### Example prompts validated
+- `what's the status of the Barclays loan?`
+- `Actually the Moraitis fee was paid today`
+- `what do I need to do tomorrow?`
+- `draft a message to Megan`
