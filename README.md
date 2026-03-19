@@ -1,6 +1,12 @@
 # obsidian-life-memory-skill
 
-Transform your OpenClaw workspace into a **structured, navigable memory system** using Obsidian. This skill provides persistent personal memory for AI agents through wikilinked notes, daily logs, and graph-based context retrieval.
+Transform your OpenClaw workspace into a **structured, navigable memory system** using plain Markdown — compatible with Obsidian for human browsing, but **does not require the Obsidian app to function**.
+
+> ⚠️ **Important:** Despite the name, this skill does **not** use the Obsidian desktop application at runtime. The Obsidian app is optional — useful for browsing your vault visually on your machine, but irrelevant to how this skill operates on a server.
+>
+> The core tool (`obsidian-cli`) is a **plain bash script** that reads and writes `.md` files directly. No Electron, no GUI, no socket connection to Obsidian. It works headlessly on any Linux/macOS system with bash.
+
+This skill provides persistent personal memory for AI agents through wikilinked notes, daily logs, backlink traversal, and graph-based context retrieval.
 
 ## What It Does
 
@@ -15,9 +21,19 @@ This skill helps agents maintain continuity across sessions by organizing inform
 
 ## `obsidian-cli` — The Core Tool
 
-The skill ships a lightweight bash wrapper at `bin/obsidian-cli` (installed to `/usr/local/bin/obsidian-cli`). It requires no external dependencies — just bash and standard Unix tools.
+The skill ships a lightweight bash wrapper at `bin/obsidian-cli` (installed to `/usr/local/bin/obsidian-cli`). It requires **no external dependencies** — just bash and standard Unix tools.
+
+**This is not the Obsidian CLI.** It's a custom script that implements vault operations (read, write, search, backlinks, tags, frontmatter queries) by directly manipulating `.md` files on disk.
 
 **The golden rule: all vault reads and writes go through `obsidian-cli`. Never use raw file tools on vault files.**
+
+### What it supports (as of 2026-03)
+
+Beyond basic CRUD, the CLI now supports:
+- `backlinks path=<file>` — find all notes linking to a given note via `[[wikilinks]]`
+- `query key=<k> [value=<v>]` — filter notes by YAML frontmatter properties
+- `tags [tag=<name>]` — list all `#tags` in the vault or find notes by tag
+- `list folder=<f> [recursive=true]` — list notes including subfolders
 
 ### Installation
 
