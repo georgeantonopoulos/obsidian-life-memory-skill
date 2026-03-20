@@ -3,7 +3,8 @@
 # Vault: /root/.openclaw/workspace
 # Supports: read, append, create, list, move, delete, edit,
 #           daily:read, daily:append, daily:create,
-#           search, search-content, print-default, status
+#           search, search-content, backlinks, query, tags,
+#           print-default, status
 
 set -euo pipefail
 
@@ -109,9 +110,16 @@ case "$cmd" in
       echo "obsidian-cli: folder not found: $TARGET" >&2
       exit 1
     fi
-    find "$TARGET" -maxdepth 1 -name "*.md" | sort | while read -r f; do
-      echo "${f#$VAULT/}"
-    done
+    RECURSIVE="${ARGS[recursive]:-false}"
+    if [[ "$RECURSIVE" == "true" ]]; then
+      find "$TARGET" -name "*.md" ! -path "*/.git/*" ! -path "*/node_modules/*" | sort | while read -r f; do
+        echo "${f#$VAULT/}"
+      done
+    else
+      find "$TARGET" -maxdepth 1 -name "*.md" | sort | while read -r f; do
+        echo "${f#$VAULT/}"
+      done
+    fi
     ;;
 
   # ── move ──────────────────────────────────────────────────────────────────
@@ -149,7 +157,7 @@ case "$cmd" in
         # [[OldName]] → [[NewName]]
         sed -i "s|\[\[$OLD_STEM\]\]|[[$NEW_STEM]]|g" "$f"
         # [[OldName|alias]] → [[NewName|alias]]
-        sed -i "s|\[\[$OLD_STEM||\[\[$NEW_STEM||g" "$f"
+        sed -i "s#\[\[$OLD_STEM|#[[$NEW_STEM|#g" "$f"
         # [text](old/path.md) → [text](new/path.md)
         sed -i "s|(${OLD_REL}.md)|(${NEW_REL}.md)|g" "$f"
       done
@@ -272,6 +280,96 @@ case "$cmd" in
     rm -f "$TMPF"
     ;;
 
+  # ── backlinks ──────────────────────────────────────────────────────────────
+  # Find all notes linking to a given note via [[wikilinks]].
+  # Usage: obsidian-cli backlinks path="People/Alice.md"
+  backlinks)
+    FILE="${ARGS[path]:-}"
+    if [[ -z "$FILE" ]]; then
+      echo "obsidian-cli: backlinks requires path=<file>" >&2
+      exit 1
+    fi
+    STEM=$(basename "$FILE" .md)
+    find "$VAULT" -name "*.md" ! -path "*/.git/*" ! -path "*/node_modules/*" | while read -r f; do
+      # Match [[Stem]] or [[Stem|...]]
+      if grep -qE "\[\[$STEM(\]|\|)" "$f" 2>/dev/null; then
+        REL="${f#$VAULT/}"
+        echo "$REL:"
+        grep -nE "\[\[$STEM(\]|\|)" "$f" 2>/dev/null | while read -r line; do
+          echo "  $line"
+        done
+      fi
+    done
+    ;;
+
+  # ── query ──────────────────────────────────────────────────────────────────
+  # Search YAML frontmatter by key/value.
+  # Usage: obsidian-cli query key=type value=project
+  #        obsidian-cli query key=type   (list all notes with that key)
+  query)
+    KEY="${ARGS[key]:-}"
+    VALUE="${ARGS[value]:-}"
+    if [[ -z "$KEY" ]]; then
+      echo "obsidian-cli: query requires key=<frontmatter-key>" >&2
+      exit 1
+    fi
+    find "$VAULT" -name "*.md" ! -path "*/.git/*" ! -path "*/node_modules/*" | sort | while read -r f; do
+      MATCHED=false
+      MATCH_VAL=""
+      # 1) YAML frontmatter (--- delimited)
+      if head -1 "$f" | grep -q '^---$'; then
+        FM=$(sed -n '2,/^---$/p' "$f" | sed '$d')
+        if [[ -n "$VALUE" ]]; then
+          echo "$FM" | grep -qiE "^${KEY}:\s*${VALUE}\s*$" && MATCHED=true
+        else
+          if echo "$FM" | grep -qiE "^${KEY}:"; then
+            MATCH_VAL=$(echo "$FM" | grep -iE "^${KEY}:" | head -1)
+            MATCHED=true
+          fi
+        fi
+      fi
+      # 2) Markdown bold metadata (**Key**: value or - **Key**: value)
+      if [[ "$MATCHED" == "false" ]]; then
+        if [[ -n "$VALUE" ]]; then
+          grep -qiE "^[-*]?\s*\*\*${KEY}\*\*:\s*${VALUE}" "$f" 2>/dev/null && MATCHED=true
+        else
+          if grep -qiE "^[-*]?\s*\*\*${KEY}\*\*:" "$f" 2>/dev/null; then
+            MATCH_VAL=$(grep -iEm1 "^[-*]?\s*\*\*${KEY}\*\*:" "$f")
+            MATCHED=true
+          fi
+        fi
+      fi
+      if [[ "$MATCHED" == "true" ]]; then
+        if [[ -n "$MATCH_VAL" ]]; then
+          echo "${f#$VAULT/}: $MATCH_VAL"
+        else
+          echo "${f#$VAULT/}"
+        fi
+      fi
+    done
+    ;;
+
+  # ── tags ───────────────────────────────────────────────────────────────────
+  # List all unique #tags, or find notes with a specific tag.
+  # Usage: obsidian-cli tags
+  #        obsidian-cli tags tag=project
+  tags)
+    TAG="${ARGS[tag]:-}"
+    if [[ -n "$TAG" ]]; then
+      # Strip leading # if provided
+      TAG="${TAG#\#}"
+      find "$VAULT" -name "*.md" ! -path "*/.git/*" ! -path "*/node_modules/*" | sort | while read -r f; do
+        if grep -qE "(^|[[:space:]])#${TAG}([[:space:]]|$)" "$f" 2>/dev/null; then
+          echo "${f#$VAULT/}"
+        fi
+      done
+    else
+      find "$VAULT" -name "*.md" ! -path "*/.git/*" ! -path "*/node_modules/*" -exec \
+        grep -ohE '(^|[[:space:]])#[A-Za-z][A-Za-z0-9_/-]*' {} + 2>/dev/null \
+        | sed 's/^[[:space:]]*//' | sort -u
+    fi
+    ;;
+
   # ── print-default ─────────────────────────────────────────────────────────
   print-default)
     if [[ "${ARGS[--path-only]:-}" == "true" ]] || printf '%s\n' "$@" | grep -q -- "--path-only"; then
@@ -313,7 +411,7 @@ Commands:
   read              path=<file>                       Read a note
   append            path=<file> content=<text>        Append to a note (\n interpreted)
   create            path=<file> content=<text>        Create/overwrite a note (force=true to overwrite)
-  list              folder=<dir>                      List .md files in a folder
+  list              folder=<dir> [recursive=true]      List .md files in a folder
   move              path=<src> to=<dst>               Move note + update [[wikilinks]]
   delete            path=<file>                       Delete a note
   edit              path=<file> find=<x> replace=<y> Find & replace in a note (regex=true for regex)
@@ -322,6 +420,9 @@ Commands:
   daily:create      content=<text>                    Create/overwrite today's daily note
   search            query=<q>                         Search by filename
   search-content    query=<q>                         Full-text search with context
+  backlinks         path=<file>                       Find notes linking to a note
+  query             key=<k> [value=<v>]               Search YAML frontmatter
+  tags              [tag=<name>]                      List all tags or find notes by tag
   print-default     [--path-only]                     Print vault path
   status                                              Show vault overview
 USAGE
