@@ -3,8 +3,9 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
-const OBSIDIAN_DAILY_CMD = 'DISPLAY=:99 /usr/local/bin/obsidian-cli daily:read';
-const OBSIDIAN_READ_PREFIX = 'DISPLAY=:99 /usr/local/bin/obsidian-cli read path=';
+const OBSIDIAN_CLI_BIN = process.env.OBSIDIAN_CLI_BIN || '/usr/local/bin/obsidian-cli';
+const OBSIDIAN_DAILY_CMD = `${OBSIDIAN_CLI_BIN} daily:read`;
+const OBSIDIAN_READ_PREFIX = `${OBSIDIAN_CLI_BIN} read path=`;
 const CLI_TIMEOUT_MS = 3000;
 const MAX_SNAPSHOT_CHARS = 12000;
 const MAX_SNAPSHOT_TOKENS = Math.ceil(MAX_SNAPSHOT_CHARS / 4);
@@ -128,7 +129,7 @@ function getStateFilePath() {
 }
 
 function readBootstrapState() {
-  const statePath = getStateFilePath();
+  const statePath = process.env.OBSIDIAN_BOOTSTRAP_STATE_PATH || getStateFilePath();
   if (!fs.existsSync(statePath)) {
     return {};
   }
@@ -142,7 +143,7 @@ function readBootstrapState() {
 }
 
 function writeBootstrapState(state) {
-  const statePath = getStateFilePath();
+  const statePath = process.env.OBSIDIAN_BOOTSTRAP_STATE_PATH || getStateFilePath();
   const dir = path.dirname(statePath);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
@@ -457,7 +458,7 @@ function scoreCandidate(relPath, content, queries) {
     if (relPath.toLowerCase().includes(needle)) score += 8;
     if (hay.includes(needle)) score += needle.includes(' ') ? 6 : 3;
   }
-  if (/^(memory|Projects|People|Places|Context)\//.test(relPath)) score += 1;
+  if (score > 0 && /^(memory|Projects|People|Places|Context)\//.test(relPath)) score += 1;
   return score;
 }
 
@@ -637,3 +638,16 @@ export default async function handler(event, context) {
     console.error('Obsidian bootstrap hook failure:', error.message);
   }
 }
+
+
+export {
+  buildBeforePromptContext,
+  retrieveTargetedVaultContext,
+  isLikelyWriteAwarePrompt,
+  buildOrientationSnapshot,
+  buildTokenAwareDailySnapshot,
+  readDailyViaFileFallback,
+  readVaultFile,
+  resolveVaultRoot,
+  getTodayDateString,
+};

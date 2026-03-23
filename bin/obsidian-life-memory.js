@@ -94,14 +94,19 @@ function restoreConfig(snapshot, dryRun = false) {
 
 function installHookAndSync(dryRun = false) {
   const syncScript = path.join(ROOT, 'scripts', 'sync_live_copy.sh');
+  const adapterSrc = path.join(ROOT, 'bin', 'obsidian-cli');
+  const adapterDst = '/usr/local/bin/obsidian-cli';
   if (dryRun) {
-    console.log(`[dry-run] bash ${syncScript}`);
+    console.log(`[dry-run] bash ${syncScript} ${ROOT}/ ${LIVE_SKILL_DIR}/`);
     console.log(`[dry-run] copy hook -> ${LIVE_HOOK_PATH}`);
+    console.log(`[dry-run] install adapter -> ${adapterDst}`);
     return;
   }
-  run('bash', [syncScript]);
+  run('bash', [syncScript, `${ROOT}/`, `${LIVE_SKILL_DIR}/`]);
   ensureDir(path.dirname(LIVE_HOOK_PATH));
   fs.copyFileSync(path.join(ROOT, 'hooks', 'obsidian-preprompt.js'), LIVE_HOOK_PATH);
+  fs.copyFileSync(adapterSrc, adapterDst);
+  fs.chmodSync(adapterDst, 0o755);
 }
 
 function applyHeartbeat({ timezone, every, dryRun }) {

@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Sync canonical skill repo -> live OpenClaw skill copy
-# while preserving instance-local/private customizations.
-
-SRC="${1:-/root/.openclaw/workspace/obsidian-life-memory-skill/}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CANONICAL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SRC="${1:-$CANONICAL_ROOT/}"
 DST="${2:-/root/.openclaw/workspace/skills/obsidian-life-memory/}"
 
 mkdir -p "$DST"
 
-# Keep destination git metadata and local-only overlays untouched.
+SRC_REAL="$(realpath "$SRC")"
+DST_REAL="$(realpath "$DST")"
+
+if [[ "$SRC_REAL" == "$DST_REAL" ]]; then
+  echo "Sync skipped: source and destination are the same ($SRC_REAL)"
+  exit 0
+fi
+
 rsync -a --delete \
   --exclude '.git/' \
   --exclude 'local-overrides/' \

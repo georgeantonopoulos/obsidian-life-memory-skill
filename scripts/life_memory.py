@@ -359,9 +359,10 @@ def _compress_events(event_lines: list[str]) -> list[str]:
 def cmd_distill(args: argparse.Namespace) -> None:
     _, vault = _store_and_vault()
     date = args.date
-    daily_file = vault / "Daily" / f"{date}.md"
+    daily_candidates = [vault / "memory" / f"{date}.md", vault / "Daily" / f"{date}.md"]
+    daily_file = next((p for p in daily_candidates if p.exists()), daily_candidates[0])
     if not daily_file.exists():
-        raise LifeMemoryError(f"Daily note not found: {daily_file}")
+        raise LifeMemoryError(f"Daily note not found: {daily_candidates[0]} or {daily_candidates[1]}")
 
     daily_text = daily_file.read_text(encoding="utf-8")
     event_lines = _extract_event_lines(daily_text)
@@ -389,7 +390,7 @@ def cmd_distill(args: argparse.Namespace) -> None:
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     block = [
         f"## Distilled {date}",
-        f"- Source: [[Daily/{date}]]",
+        f"- Source: [[memory/{date}]]",
         f"- Updated: {stamp}",
         f"- Compression: kept {len(compact)}/{len(event_lines)} high-signal events",
         "- Highlights:",

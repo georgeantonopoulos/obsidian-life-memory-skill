@@ -16,9 +16,11 @@ Use this skill when the user wants persistent personal memory in an Obsidian vau
 
 ## CLI Setup
 
-The `obsidian-cli` wrapper lives at `/usr/local/bin/obsidian-cli` (bash script, no external deps).
-- Vault is hardcoded to `/root/.openclaw/workspace`
-- Daily notes live in `memory/YYYY-MM-DD.md`
+The `obsidian-cli` command at `/usr/local/bin/obsidian-cli` is a **compatibility adapter** over the **official Obsidian CLI** (1.12.7+).
+- Runtime requires the **official Obsidian app** to be installed and running
+- Adapter forwards note operations to the official CLI while preserving the older OpenClaw command shape
+- Vault resolves to `/root/.openclaw/workspace` in this deployment
+- Daily notes live in `memory/YYYY-MM-DD.md` via Obsidian daily-notes config
 - Source: `bin/obsidian-cli` in this skill repo
 
 ## Essential Commands

@@ -2,7 +2,7 @@
 
 ## Daily Note
 
-Path: `Daily/YYYY-MM-DD.md`
+Path: `memory/YYYY-MM-DD.md`
 
 ```markdown
 ---
@@ -29,7 +29,7 @@ Path: `MEMORY.md`
 
 ```markdown
 ## Distilled 2026-02-15
-- Source: [[Daily/2026-02-15]]
+- Source: [[memory/2026-02-15]]
 - Updated: 2026-02-15 21:00
 - **09:10** [Planning] Finalized school shortlist [[Athens Move]] [[Sxoli Moraiti]]
 ```

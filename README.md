@@ -1,10 +1,10 @@
 # obsidian-life-memory-skill
 
-Transform your OpenClaw workspace into a **structured, navigable memory system** using plain Markdown — compatible with Obsidian for human browsing, but **does not require the Obsidian app to function**.
+Transform your OpenClaw workspace into a **structured, navigable memory system** using plain Markdown, with **official Obsidian desktop + official Obsidian CLI** as the runtime path.
 
-> ⚠️ **Important:** Despite the name, this skill does **not** use the Obsidian desktop application at runtime. The Obsidian app is optional — useful for browsing your vault visually on your machine, but irrelevant to how this skill operates on a server.
+> ⚠️ **Important:** This skill now assumes the **official Obsidian app is installed and running**.
 >
-> The core tool (`obsidian-cli`) is a **plain bash script** that reads and writes `.md` files directly. No Electron, no GUI, no socket connection to Obsidian. It works headlessly on any Linux/macOS system with bash.
+> The shipped `bin/obsidian-cli` is **not** a standalone vault editor anymore — it is a thin **compatibility adapter** for OpenClaw that forwards commands to the **official Obsidian 1.12.7+ CLI** while preserving the older command shape (`read path=...`, `daily:read`, `search-content`, etc.).
 
 This skill provides persistent personal memory for AI agents through wikilinked notes, daily logs, backlink traversal, and graph-based context retrieval.
 
@@ -19,30 +19,41 @@ This skill helps agents maintain continuity across sessions by organizing inform
 
 ---
 
-## `obsidian-cli` — The Core Tool
+## `obsidian-cli` — Compatibility Adapter over the Official CLI
 
-The skill ships a lightweight bash wrapper at `bin/obsidian-cli` (installed to `/usr/local/bin/obsidian-cli`). It requires **no external dependencies** — just bash and standard Unix tools.
+The skill ships `bin/obsidian-cli` and installs it to `/usr/local/bin/obsidian-cli`, but that file is now a **compatibility adapter**.
 
-**This is not the Obsidian CLI.** It's a custom script that implements vault operations (read, write, search, backlinks, tags, frontmatter queries) by directly manipulating `.md` files on disk.
+Under the hood it calls the **official Obsidian CLI** from the desktop installer (tested with **1.12.7**) and preserves the older OpenClaw-friendly command shape used throughout the vault and hooks.
 
 **The golden rule: all vault reads and writes go through `obsidian-cli`. Never use raw file tools on vault files.**
 
-### What it supports (as of 2026-03)
+### Runtime requirements
 
-Beyond basic CRUD, the CLI now supports:
-- `backlinks path=<file>` — find all notes linking to a given note via `[[wikilinks]]`
-- `query key=<k> [value=<v>]` — filter notes by YAML frontmatter properties
-- `tags [tag=<name>]` — list all `#tags` in the vault or find notes by tag
-- `list folder=<f> [recursive=true]` — list notes including subfolders
+- **Official Obsidian desktop installed** (1.12.7+ recommended)
+- **Official Obsidian CLI available** (bundled with the installer)
+- Obsidian app **running**
+- In root/headless environments: start Obsidian with `--no-sandbox` and usually `DISPLAY=:99`
+
+### What the adapter does
+
+- maps old commands like `read`, `daily:read`, `search-content`, `list`, `print-default` onto the official CLI
+- keeps daily-note operations pointed at `memory/YYYY-MM-DD.md` by relying on Obsidian's daily-notes config
+- performs safer `edit` operations through read/replace/write instead of brittle `sed` escaping
+- lets OpenClaw tools keep using the same command surface while the backend is official Obsidian
 
 ### Installation
+
+1. Install/update **official Obsidian 1.12.7+**
+2. Start the app and ensure the target vault is opened
+3. Set Obsidian daily notes folder to **`memory`** for this workflow
+4. Install the adapter:
 
 ```bash
 cp bin/obsidian-cli /usr/local/bin/obsidian-cli
 chmod +x /usr/local/bin/obsidian-cli
 ```
 
-Then set your vault path in the script (edit the `VAULT=` line at the top).
+If needed, point the adapter at the bundled official CLI by editing `OFFICIAL_CLI=` or setting up the same path used on the host.
 
 ### Command Reference
 
@@ -182,7 +193,7 @@ obsidian-life-memory-skill/
 ├── SKILL.md                           # Agent-facing skill definition
 ├── README.md                          # This file
 ├── bin/
-│   └── obsidian-cli                   # Bash CLI wrapper (install to /usr/local/bin/)
+│   └── obsidian-cli                   # Compatibility adapter over official Obsidian CLI
 ├── hooks/
 │   └── obsidian-preprompt.js          # Token-optimized bootstrap hook
 ├── scripts/
@@ -200,7 +211,9 @@ obsidian-life-memory-skill/
 
 ## Requirements
 
-- bash (the `obsidian-cli` wrapper)
+- Official Obsidian desktop 1.12.7+
+- Official Obsidian CLI (bundled with the installer)
+- bash (for the compatibility adapter)
 - Python 3.10+ (optional helper scripts)
 - Node.js 18+ (pre-prompt hook)
 
