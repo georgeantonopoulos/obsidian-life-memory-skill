@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OFFICIAL_CLI="/opt/obsidian-1.12.7/obsidian-cli"
-VAULT_NAME="workspace"
-VAULT_PATH="/root/.openclaw/workspace"
+OFFICIAL_CLI="${OBSIDIAN_OFFICIAL_CLI:-/opt/obsidian-1.12.7/obsidian-cli}"
+VAULT_NAME="${OBSIDIAN_VAULT_NAME:-workspace}"
+VAULT_PATH="${OBSIDIAN_VAULT_PATH:-/root/.openclaw/workspace}"
 
 cmd="${1:-}"
 shift || true

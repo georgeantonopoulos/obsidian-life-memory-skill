@@ -3,12 +3,14 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
-const OBSIDIAN_CLI_CMD = 'DISPLAY=:99 /usr/local/bin/obsidian-cli daily:read';
+const OBSIDIAN_CLI_BIN = process.env.OBSIDIAN_CLI_BIN || '/usr/local/bin/obsidian-cli';
+const OBSIDIAN_DAILY_CMD = `${OBSIDIAN_CLI_BIN} daily:read`;
+const OBSIDIAN_READ_PREFIX = `${OBSIDIAN_CLI_BIN} read path=`;
 const CLI_TIMEOUT_MS = 3000;
 const MAX_SNAPSHOT_CHARS = 12000;
 const MAX_SNAPSHOT_TOKENS = Math.ceil(MAX_SNAPSHOT_CHARS / 4);
+const MAX_STATE_DAYS = 14;
 
-// Core governance files to read from vault root
 const GOVERNANCE_FILES = [
   'SOUL.md',
   'MEMORY.md',
@@ -16,29 +18,49 @@ const GOVERNANCE_FILES = [
   'TOOLS.md',
 ];
 
-// Optional extra context files (instance-specific), configured via env.
-// Example:
-//   OBSIDIAN_OPTIONAL_CONTEXT_FILES="Context/retrieval_policy.md,Context/now.md"
-const OPTIONAL_CONTEXT_FILES = String(process.env.OBSIDIAN_OPTIONAL_CONTEXT_FILES || '')
-  .split(',')
-  .map((v) => v.trim())
-  .filter(Boolean)
-  // avoid accidental context explosion / injection via env
-  .slice(0, 20);
+const OPTIONAL_CONTEXT_FILES = [
+  'Context/security_policy.md',
+  'Context/job_routing_policy.md',
+  ...String(process.env.OBSIDIAN_OPTIONAL_CONTEXT_FILES || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean),
+];
 
-const MAX_STATE_DAYS = 14;
+const GOVERNANCE_TOKEN_BUDGET = Math.floor(MAX_SNAPSHOT_TOKENS * 0.4);
+const DAILY_TOKEN_BUDGET = Math.floor(MAX_SNAPSHOT_TOKENS * 0.6);
 
-// Token budget allocation: governance gets priority
-const GOVERNANCE_TOKEN_BUDGET = Math.floor(MAX_SNAPSHOT_TOKENS * 0.4); // 40% for governance
-const DAILY_TOKEN_BUDGET = Math.floor(MAX_SNAPSHOT_TOKENS * 0.6); // 60% for daily note
+const MAX_RETRIEVAL_SNIPPETS = 4;
+const MAX_RETRIEVAL_CHARS = 4500;
+const MAX_QUERY_TERMS = 6;
+const STOP_WORDS = new Set([
+  'a','an','and','are','as','at','be','but','by','for','from','how','i','if','in','into','is','it','its','me','my',
+  'of','on','or','our','please','should','so','that','the','their','them','there','this','to','we','what','when',
+  'where','which','who','why','with','would','you','your','about','just','tell','show','draft','message','email'
+]);
+const WRITE_AWARE_PATTERNS = [
+  /\bactually\b/i,
+  /\bupdate\b/i,
+  /\bchanged?\b/i,
+  /\bcorrection\b/i,
+  /\bpaid\b/i,
+  /\bconfirmed?\b/i,
+  /\bno longer\b/i,
+  /\bnow\b/i,
+  /\bnew\b/i,
+  /\buse this\b/i,
+  /\bshould be\b/i,
+  /\bisn't\b/i,
+  /\bwasn't\b/i,
+  /\bwrong\b/i,
+];
+const SEARCH_EXCLUDE_DIRS = new Set(['.git','node_modules','hooks','skills','dashboard_project','Archives','.openclaw']);
 
 function resolveVaultRoot() {
-  // 1. Check environment variable first
   if (process.env.OBSIDIAN_VAULT_PATH) {
     return process.env.OBSIDIAN_VAULT_PATH;
   }
 
-  // 2. Try to read from Python CLI config file
   try {
     const homedir = process.env.HOME || process.env.USERPROFILE || '/root';
     const configPath = path.join(
@@ -46,7 +68,7 @@ function resolveVaultRoot() {
       '.local',
       'state',
       'obsidian-life-memory',
-      'vault_config.json'
+      'vault_config.json',
     );
     if (fs.existsSync(configPath)) {
       const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -55,57 +77,17 @@ function resolveVaultRoot() {
       }
     }
   } catch {
-    // Config file doesn't exist or is invalid, continue to fallback
+    // Fall through.
   }
 
-  // 3. Fall back to current working directory
   return process.cwd();
 }
 
-function getTodayDateString() {
-  const now = new Date();
+function getTodayDateString(now = new Date()) {
   const yyyy = String(now.getFullYear());
   const mm = String(now.getMonth() + 1).padStart(2, '0');
   const dd = String(now.getDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
-}
-
-function getStateFilePath() {
-  return path.join(resolveVaultRoot(), '.obsidian-bootstrap-state.json');
-}
-
-function readBootstrapState() {
-  const statePath = getStateFilePath();
-  if (!fs.existsSync(statePath)) {
-    return {};
-  }
-
-  try {
-    const parsed = JSON.parse(fs.readFileSync(statePath, 'utf8'));
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeBootstrapState(state) {
-  const statePath = getStateFilePath();
-  const dir = path.dirname(statePath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-
-  // keep cache bounded by recency (prevents unbounded growth)
-  const entries = Object.entries(state || {}).sort((a, b) => String(b[0]).localeCompare(String(a[0])));
-  const trimmed = Object.fromEntries(entries.slice(0, MAX_STATE_DAYS));
-
-  const tmpPath = `${statePath}.tmp`;
-  fs.writeFileSync(tmpPath, `${JSON.stringify(trimmed, null, 2)}\n`, 'utf8');
-  fs.renameSync(tmpPath, statePath);
-}
-
-function computeSha256(text) {
-  return crypto.createHash('sha256').update(String(text || ''), 'utf8').digest('hex');
 }
 
 function estimateTokens(text) {
@@ -138,105 +120,101 @@ function trimTextToTokenBudget(text, tokenBudget) {
   return kept.join('\n').trim();
 }
 
-function buildTokenAwareSnapshot({ deltaText, fullSnapshot, tokenBudget }) {
-  const parts = [];
-  let remaining = tokenBudget;
+function computeSha256(text) {
+  return crypto.createHash('sha256').update(String(text || ''), 'utf8').digest('hex');
+}
 
-  if (deltaText) {
-    const deltaBlock = trimTextToTokenBudget(`Since you last spoke:\n${deltaText}`, remaining);
-    if (deltaBlock) {
-      parts.push(deltaBlock);
-      remaining -= estimateTokens(deltaBlock);
-    }
+function getStateFilePath() {
+  return path.join(resolveVaultRoot(), '.obsidian-bootstrap-state.json');
+}
+
+function readBootstrapState() {
+  const statePath = process.env.OBSIDIAN_BOOTSTRAP_STATE_PATH || getStateFilePath();
+  if (!fs.existsSync(statePath)) {
+    return {};
   }
 
-  if (fullSnapshot && remaining > 0) {
-    const summaryBlock = trimTextToTokenBudget(fullSnapshot, remaining);
-    if (summaryBlock) {
-      parts.push(summaryBlock);
-    }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeBootstrapState(state) {
+  const statePath = process.env.OBSIDIAN_BOOTSTRAP_STATE_PATH || getStateFilePath();
+  const dir = path.dirname(statePath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
   }
 
-  return trimTextToTokenBudget(parts.join('\n\n---\n\n'), tokenBudget);
+  const entries = Object.entries(state || {}).sort((a, b) => String(b[0]).localeCompare(String(a[0])));
+  const trimmed = Object.fromEntries(entries.slice(0, MAX_STATE_DAYS));
+
+  const tmpPath = `${statePath}.tmp`;
+  fs.writeFileSync(tmpPath, `${JSON.stringify(trimmed, null, 2)}\n`, 'utf8');
+  fs.renameSync(tmpPath, statePath);
 }
 
 function readDailyViaCli() {
-  return execSync(OBSIDIAN_CLI_CMD, {
+  return execSync(OBSIDIAN_DAILY_CMD, {
     encoding: 'utf8',
     timeout: CLI_TIMEOUT_MS,
   });
 }
 
-function resolveDailyPath() {
-  const filename = `${getTodayDateString()}.md`;
-  const vaultRoot = resolveVaultRoot();
-  return path.join(vaultRoot, 'Daily', filename);
-}
-
 function readDailyViaFileFallback() {
   const filename = `${getTodayDateString()}.md`;
   const vaultRoot = resolveVaultRoot();
-  
-  // Check multiple locations for daily note (OpenClaw supports various structures)
   const possiblePaths = [
-    path.join(vaultRoot, 'Daily', filename),           // Standard Obsidian Daily folder
-    path.join(vaultRoot, 'memory', filename),          // OpenClaw memory folder
-    path.join(vaultRoot, filename),                    // Root level
+    path.join(vaultRoot, 'Daily', filename),
+    path.join(vaultRoot, 'memory', filename),
+    path.join(vaultRoot, filename),
   ];
-  
+
   for (const dailyPath of possiblePaths) {
     if (fs.existsSync(dailyPath)) {
       return fs.readFileSync(dailyPath, 'utf8');
     }
   }
-  
-  // If not found anywhere, return empty (no daily note yet)
+
   return '';
 }
 
-/**
- * Read governance files from vault root
- * Returns object with file names as keys and content as values
- */
+function readVaultFile(filename) {
+  try {
+    return execSync(`${OBSIDIAN_READ_PREFIX}${JSON.stringify(filename)}`, {
+      encoding: 'utf8',
+      timeout: CLI_TIMEOUT_MS,
+    });
+  } catch {
+    const vaultRoot = path.resolve(resolveVaultRoot());
+    const filePath = path.resolve(vaultRoot, filename);
+    if (!filePath.startsWith(`${vaultRoot}${path.sep}`) && filePath !== vaultRoot) {
+      return '';
+    }
+    if (fs.existsSync(filePath)) {
+      return fs.readFileSync(filePath, 'utf8');
+    }
+    return '';
+  }
+}
+
 function readGovernanceFiles() {
-  const vaultRoot = path.resolve(resolveVaultRoot());
   const governance = {};
-
-  const filesToRead = [...GOVERNANCE_FILES, ...OPTIONAL_CONTEXT_FILES];
-
-  for (const filename of filesToRead) {
-    try {
-      // Resolve and enforce vault-root confinement (prevents path traversal)
-      const filePath = path.resolve(vaultRoot, filename);
-      if (!filePath.startsWith(`${vaultRoot}${path.sep}`) && filePath !== vaultRoot) {
-        continue;
-      }
-
-      if (fs.existsSync(filePath)) {
-        governance[filename] = fs.readFileSync(filePath, 'utf8');
-      }
-    } catch {
-      // Silently skip files that can't be read
+  for (const filename of [...GOVERNANCE_FILES, ...OPTIONAL_CONTEXT_FILES]) {
+    const content = readVaultFile(filename);
+    if (content) {
+      governance[filename] = content;
     }
   }
-
   return governance;
 }
 
-/**
- * Extract critical constraints from governance file content
- * Looks for sections like: Boundaries, Protocols, Critical Violations, Safety, Security
- */
-function extractCriticalConstraints(text, filename) {
+function extractCriticalConstraints(text) {
   if (!text) return '';
 
-  const criticalSections = [];
-  const lines = text.split('\n');
-  let currentSection = null;
-  let currentContent = [];
-  let inCriticalSection = false;
-
-  // Keywords that indicate critical constraint sections
   const criticalKeywords = [
     'boundaries',
     'protocol',
@@ -249,49 +227,34 @@ function extractCriticalConstraints(text, filename) {
     'mandatory',
     'prohibited',
     'banned',
-    'ban',
-    'penalty',
-    'consequence',
     'warning',
     '⚠️',
     '🚫',
     '❌',
   ];
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const lowerLine = line.toLowerCase();
+  const lines = text.split('\n');
+  const sections = [];
+  let currentContent = [];
+  let inCriticalSection = false;
 
-    // Check if this line starts a heading
-    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
-    if (headingMatch) {
-      // Save previous section if it was critical
+  for (const line of lines) {
+    const lower = line.toLowerCase();
+    const isHeading = /^#{1,6}\s/.test(line);
+
+    if (isHeading) {
       if (inCriticalSection && currentContent.length > 0) {
-        criticalSections.push({
-          title: currentSection,
-          content: currentContent.join('\n').trim(),
-        });
+        sections.push(currentContent.join('\n').trim());
       }
-
-      // Start new section
-      currentSection = headingMatch[2];
       currentContent = [line];
-      // Check if this heading contains critical keywords
-      inCriticalSection = criticalKeywords.some(kw => lowerLine.includes(kw));
+      inCriticalSection = criticalKeywords.some((keyword) => lower.includes(keyword));
       continue;
     }
 
-    // Also check for bullet points that contain critical keywords (like "- Protocol:" or "- NEVER")
-    if (line.match(/^\s*[-*]\s+/i)) {
-      const isCriticalLine = criticalKeywords.some(kw => lowerLine.includes(kw));
-      if (isCriticalLine) {
-        // This is a critical bullet point, include it
-        if (!inCriticalSection) {
-          // Start capturing this as a standalone critical item
-          currentSection = 'Critical Rules';
-          currentContent = [];
-          inCriticalSection = true;
-        }
+    if (/^\s*[-*]\s+/.test(line) && criticalKeywords.some((keyword) => lower.includes(keyword))) {
+      if (!inCriticalSection) {
+        currentContent = ['## Critical Rules'];
+        inCriticalSection = true;
       }
     }
 
@@ -300,49 +263,14 @@ function extractCriticalConstraints(text, filename) {
     }
   }
 
-  // Don't forget the last section
   if (inCriticalSection && currentContent.length > 0) {
-    criticalSections.push({
-      title: currentSection,
-      content: currentContent.join('\n').trim(),
-    });
+    sections.push(currentContent.join('\n').trim());
   }
 
-  // Also extract any lines with "NEVER" or "ALWAYS" (strong constraints)
-  const strongConstraints = [];
-  for (const line of lines) {
-    const upperLine = line.toUpperCase();
-    if (upperLine.includes('NEVER') || upperLine.includes('ALWAYS') || upperLine.includes('MANDATORY')) {
-      if (line.trim().startsWith('-') || line.trim().startsWith('*')) {
-        strongConstraints.push(line.trim());
-      }
-    }
-  }
-
-  // Combine extracted content
-  const parts = [];
-
-  for (const section of criticalSections) {
-    parts.push(section.content);
-  }
-
-  if (strongConstraints.length > 0) {
-    // Deduplicate
-    const unique = [...new Set(strongConstraints)];
-    parts.push('## Absolute Constraints', ...unique);
-  }
-
-  const result = parts.join('\n\n').trim();
-  return result;
+  return sections.join('\n\n').trim();
 }
 
-/**
- * Build unified governance context from all governance files
- */
 function buildGovernanceContext(governanceFiles) {
-  const sections = [];
-
-  // Map filenames to friendly names
   const fileLabels = {
     'SOUL.md': 'Behavioral Constraints (SOUL)',
     'MEMORY.md': 'Long-Term Rules & Protocols (MEMORY)',
@@ -350,10 +278,9 @@ function buildGovernanceContext(governanceFiles) {
     'TOOLS.md': 'Tool Usage Patterns (TOOLS)',
   };
 
+  const sections = [];
   for (const [filename, content] of Object.entries(governanceFiles)) {
-    if (!content) continue;
-
-    const critical = extractCriticalConstraints(content, filename);
+    const critical = extractCriticalConstraints(content);
     if (critical) {
       sections.push(`## ${fileLabels[filename] || filename}\n${critical}`);
     }
@@ -362,98 +289,14 @@ function buildGovernanceContext(governanceFiles) {
   return sections.join('\n\n');
 }
 
-function extractWikilinks(text) {
-  const matches = text.match(/!?\[\[[^\]]+\]\]/g) || [];
-  return Array.from(new Set(matches));
-}
-
-function extractTags(text) {
-  const matches = text.match(/(^|\s)(#[A-Za-z0-9_\/-]+)/gim) || [];
-  const normalized = matches.map((m) => m.trim());
-  return Array.from(new Set(normalized));
-}
-
-function extractTaskLines(lines) {
-  return lines.filter((line) => /^\s*- \[( |x|X)\]\s/.test(line));
-}
-
-function extractCommentLines(lines) {
-  const out = [];
-  let inBlockComment = false;
-
-  for (const line of lines) {
-    if (line.includes('%%')) {
-      const markerCount = (line.match(/%%/g) || []).length;
-      if (markerCount % 2 === 1) {
-        inBlockComment = !inBlockComment;
-      }
-      out.push(line);
-      continue;
-    }
-
-    if (inBlockComment) {
-      out.push(line);
-    }
-  }
-
-  return out;
-}
-
 function findHeadingContext(lines, startIdx) {
   const headings = [];
-  for (let i = 0; i <= startIdx; i += 1) {
-    const line = lines[i];
-    if (/^#{1,6}\s/.test(line)) {
-      headings.push(line);
+  for (let index = 0; index <= startIdx; index += 1) {
+    if (/^#{1,6}\s/.test(lines[index])) {
+      headings.push(lines[index]);
     }
   }
   return headings;
-}
-
-function clipFromTailByLine(lines, maxChars) {
-  const picked = [];
-  let used = 0;
-
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const candidate = lines[i];
-    const cost = candidate.length + 1;
-
-    // Never split lines: either include the full line or skip it.
-    if (used + cost > maxChars) {
-      continue;
-    }
-
-    picked.push(i);
-    used += cost;
-  }
-
-  if (picked.length === 0) {
-    return [];
-  }
-
-  picked.sort((a, b) => a - b);
-  const startIdx = picked[0];
-  const headingContext = findHeadingContext(lines, startIdx);
-
-  const result = [];
-  const seen = new Set();
-
-  for (const heading of headingContext) {
-    if (!seen.has(heading)) {
-      result.push(heading);
-      seen.add(heading);
-    }
-  }
-
-  for (const idx of picked) {
-    const line = lines[idx];
-    if (line.length === 0 || !seen.has(line)) {
-      result.push(line);
-      seen.add(line);
-    }
-  }
-
-  return result;
 }
 
 function buildObsidianSafeSnapshot(raw, maxChars) {
@@ -461,100 +304,263 @@ function buildObsidianSafeSnapshot(raw, maxChars) {
   if (!text) {
     return '';
   }
-
   if (text.length <= maxChars) {
     return text;
   }
 
   const lines = text.split('\n');
-  const clippedLines = clipFromTailByLine(lines, Math.floor(maxChars * 0.65));
-  const allTasks = extractTaskLines(lines);
-  const allLinks = extractWikilinks(text);
-  const allTags = extractTags(text);
-  const commentLines = extractCommentLines(lines);
-
-  const parts = [];
-
-  parts.push('## Recent Snapshot');
-  parts.push(clippedLines.join('\n').trim());
-
-  if (allTasks.length) {
-    parts.push('## Tasks (Preserved)');
-    parts.push(allTasks.join('\n'));
-  }
-
-  if (allLinks.length) {
-    parts.push('## Wikilinks (Graph Integrity)');
-    parts.push(allLinks.join(' '));
-  }
-
-  if (allTags.length) {
-    parts.push('## Tags');
-    parts.push(allTags.join(' '));
-  }
-
-  if (commentLines.length) {
-    parts.push('## Comments');
-    parts.push(commentLines.join('\n'));
-  }
-
-  const assembled = parts.filter(Boolean).join('\n\n').trim();
-
-  if (assembled.length <= maxChars) {
-    return assembled;
-  }
-
-  // Final guard: still line-based clipping only, so wikilinks remain intact.
-  const bounded = [];
+  const picked = [];
   let used = 0;
-  for (const line of assembled.split('\n')) {
-    const cost = line.length + 1;
-    if (used + cost > maxChars) {
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const cost = lines[index].length + 1;
+    if (used + cost > Math.floor(maxChars * 0.65)) {
       continue;
     }
-    bounded.push(line);
+    picked.push(index);
     used += cost;
   }
 
-  return `${bounded.join('\n').trim()}\n\n[Truncated safely by line boundaries to preserve Obsidian syntax]`;
+  if (picked.length === 0) {
+    return text.slice(-maxChars);
+  }
+
+  picked.sort((a, b) => a - b);
+  const headingContext = findHeadingContext(lines, picked[0]);
+  const output = [...headingContext, ...picked.map((index) => lines[index])];
+  return output.join('\n').trim().slice(0, maxChars);
 }
 
-/**
- * Build unified context snapshot combining daily note and governance files
- * Governance files get priority for token budget
- */
-function buildUnifiedSnapshot({ dailyText, governanceContext, tokenBudget }) {
+function buildTokenAwareDailySnapshot(rawDaily, previousState) {
+  const normalized = String(rawDaily || '').replace(/\r\n?/g, '\n');
+  const lines = normalized ? normalized.split('\n') : [];
+  const lineCount = lines.length;
+  const fullSnapshot = buildObsidianSafeSnapshot(normalized, MAX_SNAPSHOT_CHARS);
+
+  let deltaText = '';
+  if (previousState && Number.isInteger(previousState.lastLineCount) && lineCount > previousState.lastLineCount) {
+    deltaText = lines.slice(previousState.lastLineCount).join('\n').trim();
+  }
+
   const parts = [];
-  let remaining = tokenBudget;
+  let remaining = DAILY_TOKEN_BUDGET;
 
-  // PRIORITY 1: Governance context (behavioral constraints are critical)
-  if (governanceContext) {
-    const govHeader = '# Behavioral Governance\n';
-    const govTokens = estimateTokens(governanceContext);
-    const govBudget = Math.min(govTokens, GOVERNANCE_TOKEN_BUDGET);
-
-    const trimmedGov = trimTextToTokenBudget(governanceContext, govBudget);
-    if (trimmedGov) {
-      parts.push(govHeader + trimmedGov);
-      remaining -= estimateTokens(govHeader + trimmedGov);
+  if (deltaText) {
+    const deltaBlock = trimTextToTokenBudget(`Since you last spoke:\n${deltaText}`, remaining);
+    if (deltaBlock) {
+      parts.push(deltaBlock);
+      remaining -= estimateTokens(deltaBlock);
     }
   }
 
-  // PRIORITY 2: Daily note context
-  if (dailyText && remaining > 0) {
-    const dailyHeader = "# Today's Context (from daily note)\n";
-    const dailyBudget = Math.min(remaining, DAILY_TOKEN_BUDGET);
+  if (remaining > 0) {
+    const summaryBlock = trimTextToTokenBudget(fullSnapshot, remaining);
+    if (summaryBlock) {
+      parts.push(summaryBlock);
+    }
+  }
 
-    const trimmedDaily = trimTextToTokenBudget(dailyText, dailyBudget);
-    if (trimmedDaily) {
-      parts.push(dailyHeader + trimmedDaily);
+  return {
+    dailyText: trimTextToTokenBudget(parts.join('\n\n---\n\n'), DAILY_TOKEN_BUDGET),
+    lineCount,
+    normalized,
+  };
+}
+
+function buildOrientationSnapshot({ governanceContext, dailyText }) {
+  const parts = [];
+  let remaining = MAX_SNAPSHOT_TOKENS;
+
+  if (governanceContext) {
+    const governance = trimTextToTokenBudget(governanceContext, GOVERNANCE_TOKEN_BUDGET);
+    if (governance) {
+      parts.push(`# Behavioral Governance\n${governance}`);
+      remaining -= estimateTokens(governance);
+    }
+  }
+
+  if (dailyText && remaining > 0) {
+    const daily = trimTextToTokenBudget(dailyText, Math.min(remaining, DAILY_TOKEN_BUDGET));
+    if (daily) {
+      parts.push(`# Session Orientation (daily/open items)\n${daily}`);
     }
   }
 
   return parts.join('\n\n---\n\n').trim();
 }
 
+
+function isLikelyWriteAwarePrompt(prompt) {
+  const text = String(prompt || '').trim();
+  return WRITE_AWARE_PATTERNS.some((rx) => rx.test(text));
+}
+
+function deriveFocusedQueries(prompt) {
+  const text = String(prompt || '').replace(/[`*_#>\[\](){}]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!text) return [];
+
+  const quoted = Array.from(text.matchAll(/"([^"]{3,80})"|'([^']{3,80})'/g))
+    .map((m) => (m[1] || m[2] || '').trim())
+    .filter(Boolean)
+    .slice(0, 2);
+
+  const capitalizedPhrases = Array.from(text.matchAll(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b/g))
+    .map((m) => m[1].trim())
+    .filter((v) => v.length >= 4)
+    .slice(0, 3);
+
+  const terms = text.toLowerCase().split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .filter((t) => t.length >= 3 && !STOP_WORDS.has(t));
+  const uniqTerms = [...new Set(terms)].slice(0, MAX_QUERY_TERMS);
+
+  const queries = [];
+  for (const q of [...quoted, ...capitalizedPhrases]) {
+    if (!queries.includes(q)) queries.push(q);
+  }
+  if (uniqTerms.length) {
+    const dense = uniqTerms.slice(0, 3).join(' ');
+    if (dense && !queries.includes(dense)) queries.push(dense);
+  }
+  for (const t of uniqTerms.slice(0, 3)) {
+    if (!queries.includes(t)) queries.push(t);
+  }
+  return queries.slice(0, 3);
+}
+
+function listVaultTextFiles(root) {
+  const out = [];
+  function walk(dir, rel='') {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const relPath = rel ? path.join(rel, entry.name) : entry.name;
+      if (entry.isDirectory()) {
+        if (SEARCH_EXCLUDE_DIRS.has(entry.name)) continue;
+        walk(path.join(dir, entry.name), relPath);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (!/\.(md|txt|json)$/i.test(entry.name)) continue;
+      out.push(relPath);
+    }
+  }
+  walk(root);
+  return out;
+}
+
+function scoreCandidate(relPath, content, queries) {
+  const hay = `${relPath}\n${String(content || '').slice(0, 4000)}`.toLowerCase();
+  let score = 0;
+  for (const q of queries) {
+    const needle = q.toLowerCase();
+    if (!needle) continue;
+    if (relPath.toLowerCase().includes(needle)) score += 8;
+    if (hay.includes(needle)) score += needle.includes(' ') ? 6 : 3;
+  }
+  if (score > 0 && /^(memory|Projects|People|Places|Context)\//.test(relPath)) score += 1;
+  return score;
+}
+
+function buildSnippet(relPath, content, queries) {
+  const text = String(content || '').replace(/\r\n?/g, '\n');
+  const lines = text.split('\n');
+  let best = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    const lower = lines[i].toLowerCase();
+    if (queries.some((q) => lower.includes(q.toLowerCase()))) { best = i; break; }
+  }
+  if (best === -1) {
+    for (let i = 0; i < lines.length; i += 1) {
+      if (/^#{1,3}\s|^-\s|^\|/.test(lines[i])) { best = i; break; }
+    }
+  }
+  if (best === -1) best = 0;
+  const start = Math.max(0, best - 3);
+  const end = Math.min(lines.length, best + 7);
+  const body = lines.slice(start, end).join('\n').trim();
+  return `- ${relPath}\n${body}`.trim();
+}
+
+function retrieveTargetedVaultContext(prompt) {
+  const vaultRoot = path.resolve(resolveVaultRoot());
+  const queries = deriveFocusedQueries(prompt);
+  if (!queries.length) return { queries: [], snippets: [], writeTargets: [] };
+
+  const files = listVaultTextFiles(vaultRoot);
+  const scored = [];
+  for (const relPath of files) {
+    let content = '';
+    try { content = readVaultFile(relPath); } catch { continue; }
+    const score = scoreCandidate(relPath, content, queries, prompt);
+    if (score > 0) scored.push({ relPath, score, content });
+  }
+  scored.sort((a, b) => b.score - a.score || a.relPath.localeCompare(b.relPath));
+  const top = scored.slice(0, MAX_RETRIEVAL_SNIPPETS);
+  const snippets = top.map((item) => buildSnippet(item.relPath, item.content, queries));
+  const writeTargets = top.slice(0, 3).map((item) => item.relPath);
+  return { queries, snippets, writeTargets };
+}
+
+function buildBeforePromptContext(prompt) {
+  const retrieval = retrieveTargetedVaultContext(prompt);
+  if (!retrieval.snippets.length) return '';
+
+  const parts = [];
+  parts.push('# Obsidian Targeted Retrieval');
+  parts.push('');
+  parts.push(`Focus: ${String(prompt || '').trim().slice(0, 220)}`);
+  parts.push(`Queries: ${retrieval.queries.map((q) => JSON.stringify(q)).join(', ')}`);
+  parts.push('');
+  parts.push('Relevant snippets:');
+  parts.push(retrieval.snippets.join('\n\n'));
+
+  if (isLikelyWriteAwarePrompt(prompt) && retrieval.writeTargets.length) {
+    parts.push('');
+    parts.push('Possible write targets / edit hints:');
+    for (const target of retrieval.writeTargets) {
+      parts.push(`- ${target} — already mentions this topic; likely place to update if the retrieved snippet is stale.`);
+    }
+    parts.push('Hook note: no vault write was performed. Decide explicitly later if an obsidian edit/append/create call is warranted.');
+  }
+
+  return String(parts.join('\n')).slice(0, MAX_RETRIEVAL_CHARS).trim();
+}
+
+function readThrottleWarning() {
+  try {
+    const flagFile = '/root/.openclaw/workspace/.claude_usage_flag';
+    if (!fs.existsSync(flagFile)) {
+      return '';
+    }
+
+    const flagContent = fs.readFileSync(flagFile, 'utf8');
+    const throttle = flagContent.match(/CLAUDE_THROTTLE=(\d)/)?.[1];
+    const weekly = flagContent.match(/CLAUDE_USAGE_WEEKLY=(\d+)/)?.[1];
+    const sonnet = flagContent.match(/CLAUDE_USAGE_SONNET=(\d+)/)?.[1];
+    if (throttle === '1' || (weekly && parseInt(weekly, 10) >= 70)) {
+      return `⚠️ CLAUDE USAGE HIGH: ${weekly}% weekly / ${sonnet}% Sonnet used.\nTHROTTLE MODE: Minimise tool calls, combine operations, and skip redundant fetches.\n`;
+    }
+  } catch {
+    // Non-fatal.
+  }
+
+  return '';
+}
+
 export default async function handler(event, context) {
+  if (event.type === 'before_prompt_build') {
+    try {
+      const injected = buildBeforePromptContext(event.prompt || '');
+      if (injected) {
+        return { prependContext: injected };
+      }
+    } catch (error) {
+      console.error('Obsidian before_prompt_build hook failure:', error.message);
+    }
+    return;
+  }
+
   if (event.type !== 'agent:bootstrap') {
     return;
   }
@@ -565,99 +571,83 @@ export default async function handler(event, context) {
     const today = getTodayDateString();
     const state = readBootstrapState();
     const dayState = state[today] || null;
-    let obsidianOutput = '';
 
-    // Read daily note
+    let rawDaily = '';
     try {
-      obsidianOutput = readDailyViaCli();
-    } catch (_cliError) {
-      obsidianOutput = readDailyViaFileFallback();
+      rawDaily = readDailyViaCli();
+    } catch {
+      rawDaily = readDailyViaFileFallback();
     }
 
-    // Read governance files
     const governanceFiles = readGovernanceFiles();
     const governanceContext = buildGovernanceContext(governanceFiles);
+    const { dailyText, lineCount, normalized } = buildTokenAwareDailySnapshot(rawDaily, dayState);
 
-    // Compute combined hash for caching (daily + governance)
-    const normalizedOutput = String(obsidianOutput || '').replace(/\r\n?/g, '\n');
     const governanceHash = computeSha256(governanceContext);
-    const dailyHash = computeSha256(normalizedOutput);
-    const combinedHash = computeSha256(dailyHash + governanceHash);
+    const dailyHash = computeSha256(normalized);
+    const combinedHash = computeSha256(`${governanceHash}:${dailyHash}`);
 
-    const lineCount = normalizedOutput ? normalizedOutput.split('\n').length : 0;
-
-    let safeSnapshot = '';
-
-    // Use combined hash for cache validation
+    let orientationSnapshot = '';
     if (dayState && dayState.combinedHash === combinedHash && dayState.snapshot) {
-      safeSnapshot = dayState.snapshot;
+      orientationSnapshot = dayState.snapshot;
     } else {
-      // Build daily note snapshot
-      const fullDailySnapshot = buildObsidianSafeSnapshot(normalizedOutput, MAX_SNAPSHOT_CHARS);
-
-      // Build delta for daily note only
-      let deltaText = '';
-      if (dayState && Number.isInteger(dayState.lastLineCount) && lineCount > dayState.lastLineCount) {
-        deltaText = normalizedOutput
-          .split('\n')
-          .slice(dayState.lastLineCount)
-          .join('\n')
-          .trim();
-      }
-
-      // Build token-aware daily content
-      const dailyContent = buildTokenAwareSnapshot({
-        deltaText,
-        fullSnapshot: fullDailySnapshot,
-        tokenBudget: DAILY_TOKEN_BUDGET,
-      });
-
-      // Build unified snapshot with governance priority
-      safeSnapshot = buildUnifiedSnapshot({
-        dailyText: dailyContent,
-        governanceContext,
-        tokenBudget: MAX_SNAPSHOT_TOKENS,
-      });
-
-      // Save state with combined hash
+      orientationSnapshot = buildOrientationSnapshot({ governanceContext, dailyText });
       state[today] = {
-        noteHash: dailyHash,
         governanceHash,
+        dailyHash,
         combinedHash,
-        snapshot: safeSnapshot,
         lastLineCount: lineCount,
+        snapshot: orientationSnapshot,
         lastUpdatedIso: new Date().toISOString(),
       };
       writeBootstrapState(state);
     }
 
-    if (safeSnapshot) {
+    if (orientationSnapshot) {
       context.bootstrapFiles['OBSIDIAN_DAILY.md'] = [
-        '# Obsidian Context Snapshot',
+        '# Obsidian Session Orientation',
         '',
-        safeSnapshot,
+        readThrottleWarning(),
+        orientationSnapshot,
         '',
         '---',
-        '*Injected via Obsidian Pre-Prompt Hook (Governance + Daily Note)*',
+        '*Injected at session start only. Per-turn vault retrieval now happens in before_prompt_build.*',
       ].join('\n');
-    } else {
-      context.bootstrapFiles['OBSIDIAN_DAILY.md'] = [
-        '# Obsidian Context Snapshot',
-        '',
-        'No log entries found for today yet. Use the obsidian-life-memory skill to log events.',
-        '',
-        governanceContext ? '\n# Behavioral Governance\n' + governanceContext : '',
-      ].join('\n');
+      return;
     }
+
+    context.bootstrapFiles['OBSIDIAN_DAILY.md'] = [
+      '# Obsidian Session Orientation',
+      '',
+      'No daily orientation context was available yet.',
+      '',
+      governanceContext ? `# Behavioral Governance\n${governanceContext}` : '',
+      '',
+      '---',
+      '*Injected at session start only. Per-turn vault retrieval now happens in before_prompt_build.*',
+    ].join('\n');
   } catch (error) {
     context.bootstrapFiles['OBSIDIAN_ERROR.md'] = [
       '# Obsidian Memory Error',
       '',
-      `The pre-prompt hook failed to load context: ${error.message}`,
+      `The Obsidian bootstrap hook failed: ${error.message}`,
       '',
-      'Please check the Obsidian service status.',
+      'Session-start orientation was unavailable for this run.',
     ].join('\n');
 
-    console.error('Obsidian preprompt hook failure:', error.message);
+    console.error('Obsidian bootstrap hook failure:', error.message);
   }
 }
+
+
+export {
+  buildBeforePromptContext,
+  retrieveTargetedVaultContext,
+  isLikelyWriteAwarePrompt,
+  buildOrientationSnapshot,
+  buildTokenAwareDailySnapshot,
+  readDailyViaFileFallback,
+  readVaultFile,
+  resolveVaultRoot,
+  getTodayDateString,
+};
