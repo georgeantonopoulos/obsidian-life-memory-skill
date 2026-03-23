@@ -8,6 +8,7 @@ export function makeTempVault() {
   fs.mkdirSync(path.join(root, 'memory'), { recursive: true });
   fs.mkdirSync(path.join(root, 'People'), { recursive: true });
   fs.mkdirSync(path.join(root, 'Projects'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'Places'), { recursive: true });
   fs.writeFileSync(path.join(root, 'SOUL.md'), '# Soul\n\nRules live here.\n');
   fs.writeFileSync(path.join(root, 'USER.md'), '# User\n\nGeorge\n');
   fs.writeFileSync(path.join(root, 'AGENTS.md'), '# Agents\n\nUse obsidian-cli.\n');

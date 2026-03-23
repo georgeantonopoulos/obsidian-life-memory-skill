@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawnSync } from 'child_process';
@@ -93,14 +94,19 @@ function restoreConfig(snapshot, dryRun = false) {
 
 function installHookAndSync(dryRun = false) {
   const syncScript = path.join(ROOT, 'scripts', 'sync_live_copy.sh');
+  const adapterSrc = path.join(ROOT, 'bin', 'obsidian-cli');
+  const adapterDst = '/usr/local/bin/obsidian-cli';
   if (dryRun) {
-    console.log(`[dry-run] bash ${syncScript}`);
+    console.log(`[dry-run] bash ${syncScript} ${ROOT}/ ${LIVE_SKILL_DIR}/`);
     console.log(`[dry-run] copy hook -> ${LIVE_HOOK_PATH}`);
+    console.log(`[dry-run] install adapter -> ${adapterDst}`);
     return;
   }
-  run('bash', [syncScript]);
+  run('bash', [syncScript, `${ROOT}/`, `${LIVE_SKILL_DIR}/`]);
   ensureDir(path.dirname(LIVE_HOOK_PATH));
   fs.copyFileSync(path.join(ROOT, 'hooks', 'obsidian-preprompt.js'), LIVE_HOOK_PATH);
+  fs.copyFileSync(adapterSrc, adapterDst);
+  fs.chmodSync(adapterDst, 0o755);
 }
 
 function applyHeartbeat({ timezone, every, dryRun }) {
@@ -208,6 +214,29 @@ function cmdDoctor() {
   checks.push(['live hook exists', fs.existsSync(LIVE_HOOK_PATH)]);
   checks.push(['template now exists', fs.existsSync(path.join(ROOT, 'templates', 'Context', 'now.example.md'))]);
   checks.push(['template policy exists', fs.existsSync(path.join(ROOT, 'templates', 'Context', 'retrieval_policy.example.md'))]);
+
+  // Check if context files are deployed to workspace
+  const ctxDir = path.join(DEFAULT_WORKSPACE, 'Context');
+  checks.push(['context now.md deployed', fs.existsSync(path.join(ctxDir, 'now.md'))]);
+  checks.push(['context retrieval_policy.md deployed', fs.existsSync(path.join(ctxDir, 'retrieval_policy.md'))]);
+
+  // Check vault path configuration
+  const vaultConfigPath = path.join(os.homedir(), '.local', 'state', 'obsidian-life-memory', 'vault_config.json');
+  let vaultPathConfigured = false;
+  let vaultPathExists = false;
+  if (fs.existsSync(vaultConfigPath)) {
+    try {
+      const vaultConfig = JSON.parse(fs.readFileSync(vaultConfigPath, 'utf8'));
+      vaultPathConfigured = Boolean(vaultConfig.vault_path);
+      if (vaultPathConfigured) {
+        vaultPathExists = fs.existsSync(vaultConfig.vault_path);
+      }
+    } catch {
+      // Config file exists but is invalid
+    }
+  }
+  checks.push(['vault path configured', vaultPathConfigured]);
+  checks.push(['vault path exists', vaultPathExists]);
 
   const oc = runSafe('openclaw', ['status']);
   checks.push(['openclaw reachable', oc.ok]);

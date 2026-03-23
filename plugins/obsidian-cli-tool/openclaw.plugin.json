@@ -1,0 +1,17 @@
+{
+  "id": "obsidian-cli-tool",
+  "name": "Obsidian CLI Tool",
+  "description": "First-class Obsidian vault tools backed by obsidian-cli.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "command": { "type": "string" },
+      "maxOutputChars": { "type": "number", "minimum": 1000 }
+    }
+  },
+  "uiHints": {
+    "command": { "label": "Obsidian CLI Command", "help": "Path to obsidian-cli wrapper/binary." },
+    "maxOutputChars": { "label": "Max Output Characters" }
+  }
+}
