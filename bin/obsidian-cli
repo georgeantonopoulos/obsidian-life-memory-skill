@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+OFFICIAL_CLI="/opt/obsidian-1.12.7/obsidian-cli"
+VAULT_NAME="workspace"
+VAULT_PATH="/root/.openclaw/workspace"
+
+cmd="${1:-}"
+shift || true
+
+declare -A ARGS
+for arg in "$@"; do
+  key="${arg%%=*}"
+  val="${arg#*=}"
+  val="${val%\"}"
+  val="${val#\"}"
+  val="${val%\'}"
+  val="${val#\'}"
+  ARGS["$key"]="$val"
+done
+
+call_official() {
+  "$OFFICIAL_CLI" vault="$VAULT_NAME" "$@"
+}
+
+resolve_path() {
+  local p="${ARGS[path]:-}"
+  if [[ -z "$p" ]]; then
+    printf '%s' ""
+    return
+  fi
+  if [[ "$p" == "$VAULT_PATH/"* ]]; then
+    p="${p#$VAULT_PATH/}"
+  fi
+  printf '%s' "$p"
+}
+
+case "$cmd" in
+  read)
+    PATH_ARG="$(resolve_path)"
+    call_official read path="$PATH_ARG"
+    ;;
+
+  append)
+    PATH_ARG="$(resolve_path)"
+    CONTENT="${ARGS[content]:-}"
+    call_official append path="$PATH_ARG" content="$CONTENT"
+    ;;
+
+  create)
+    PATH_ARG="$(resolve_path)"
+    CONTENT="${ARGS[content]:-}"
+    if [[ "${ARGS[force]:-false}" == "true" ]]; then
+      call_official create path="$PATH_ARG" content="$CONTENT" overwrite
+    else
+      call_official create path="$PATH_ARG" content="$CONTENT"
+    fi
+    ;;
+
+  list)
+    FOLDER="${ARGS[folder]:-}"
+    if [[ "$FOLDER" == "$VAULT_PATH/"* ]]; then
+      FOLDER="${FOLDER#$VAULT_PATH/}"
+    fi
+    call_official files folder="$FOLDER"
+    ;;
+
+  move)
+    SRC="$(resolve_path)"
+    DST="${ARGS[to]:-}"
+    if [[ "$DST" == "$VAULT_PATH/"* ]]; then
+      DST="${DST#$VAULT_PATH/}"
+    fi
+    call_official move path="$SRC" to="$DST"
+    ;;
+
+  delete)
+    PATH_ARG="$(resolve_path)"
+    call_official delete path="$PATH_ARG" permanent
+    ;;
+
+  edit)
+    PATH_ARG="$(resolve_path)"
+    FIND="${ARGS[find]:-}"
+    REPLACE="${ARGS[replace]:-}"
+    REGEX="${ARGS[regex]:-false}"
+    TMP="$(mktemp)"
+    call_official read path="$PATH_ARG" > "$TMP"
+    python3 - "$TMP" "$FIND" "$REPLACE" "$REGEX" <<'PY'
+import re, sys, pathlib
+p = pathlib.Path(sys.argv[1])
+find = sys.argv[2]
+replace = sys.argv[3]
+regex = sys.argv[4].lower() == 'true'
+text = p.read_text()
+if regex:
+    new, n = re.subn(find, replace, text, count=1, flags=re.MULTILINE)
+else:
+    n = 1 if find in text else 0
+    new = text.replace(find, replace, 1)
+if n == 0:
+    print('obsidian-cli: edit find text not found', file=sys.stderr)
+    sys.exit(1)
+p.write_text(new)
+PY
+    call_official create path="$PATH_ARG" content="$(cat "$TMP")" overwrite >/dev/null
+    rm -f "$TMP"
+    echo "Edited: $PATH_ARG"
+    ;;
+
+  daily:read)
+    call_official daily:read
+    ;;
+
+  daily:append)
+    CONTENT="${ARGS[content]:-}"
+    call_official daily:append content="$CONTENT"
+    ;;
+
+  daily:create)
+    CONTENT="${ARGS[content]:-}"
+    DAILY_PATH="$(call_official daily:path)"
+    call_official create path="$DAILY_PATH" content="$CONTENT" overwrite
+    ;;
+
+  search)
+    QUERY="${ARGS[query]:-${1:-}}"
+    call_official search query="$QUERY"
+    ;;
+
+  search-content)
+    QUERY="${ARGS[query]:-${1:-}}"
+    MAX="${ARGS[max]:-8}"
+    CONTEXT="${ARGS[context]:-3}"
+    call_official search:context query="$QUERY" limit="$MAX" context="$CONTEXT"
+    ;;
+
+  backlinks)
+    PATH_ARG="$(resolve_path)"
+    call_official backlinks path="$PATH_ARG"
+    ;;
+
+  query)
+    KEY="${ARGS[key]:-}"
+    VALUE="${ARGS[value]:-}"
+    if [[ -n "$VALUE" ]]; then
+      call_official search:context query="$KEY: $VALUE" limit="20" context="1"
+    else
+      call_official search:context query="$KEY:" limit="20" context="1"
+    fi
+    ;;
+
+  tags)
+    TAG="${ARGS[tag]:-}"
+    if [[ -n "$TAG" ]]; then
+      call_official search query="#$TAG"
+    else
+      call_official tags
+    fi
+    ;;
+
+  print-default)
+    if [[ "${1:-}" == "--path-only" ]]; then
+      printf '%s\n' "$VAULT_PATH"
+    else
+      printf '%s\n' "$VAULT_NAME"
+    fi
+    ;;
+
+  status)
+    printf 'Vault:  %s\n' "$VAULT_PATH"
+    printf 'CLI:    %s\n' "$OFFICIAL_CLI"
+    printf 'Daily:  %s\n' "$(call_official daily:path)"
+    printf 'Version:%s\n' " $(call_official version)"
+    ;;
+
+  vaults|version|files|properties|property:read|search:context|daily:path)
+    call_official "$cmd" "$@"
+    ;;
+
+  *)
+    exec "$OFFICIAL_CLI" vault="$VAULT_NAME" "$cmd" "$@"
+    ;;
+esac

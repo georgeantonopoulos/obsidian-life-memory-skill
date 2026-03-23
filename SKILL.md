@@ -9,70 +9,117 @@ Use this skill when the user wants persistent personal memory in an Obsidian vau
 
 ## Core Rules
 
-- Prefer Obsidian CLI (`obsidian`) for note operations (`search`, `read`, `daily:append`, graph checks).
+- Use `obsidian-cli` for **all** note operations — never raw file tools on vault files.
 - Read before writing: retrieve recent context first when the request depends on prior facts or decisions.
-- Keep edits reversible: run organization in dry-run mode first, then apply.
+- Keep edits reversible: prefer `append` or `edit` over full `create` overwrites.
 - Preserve privacy: do not publish or exfiltrate vault content unless explicitly requested.
+
+## CLI Setup
+
+The `obsidian-cli` command at `/usr/local/bin/obsidian-cli` is a **compatibility adapter** over the **official Obsidian CLI** (1.12.7+).
+- Runtime requires the **official Obsidian app** to be installed and running
+- Adapter forwards note operations to the official CLI while preserving the older OpenClaw command shape
+- Vault resolves to `/root/.openclaw/workspace` in this deployment
+- Daily notes live in `memory/YYYY-MM-DD.md` via Obsidian daily-notes config
+- Source: `bin/obsidian-cli` in this skill repo
+
+## Essential Commands
+
+### Reading notes
+```bash
+obsidian-cli read path="MEMORY.md"
+obsidian-cli read path="People/george.md"
+obsidian-cli daily:read                        # today's daily note
+```
+
+### Writing & editing notes
+```bash
+# Append — \n and \t are interpreted (printf %b)
+obsidian-cli daily:append content="## 14:30 UTC\n- Thing happened"
+obsidian-cli append path="MEMORY.md" content="\n## New section\n- fact"
+
+# Create — errors if file exists (use force=true to overwrite)
+obsidian-cli create path="People/carla.md" content="# Carla\nMortgage broker"
+obsidian-cli create path="People/carla.md" content="# Updated" force=true
+
+# Daily create/overwrite
+obsidian-cli daily:create content="# Daily Note — $(date -u +%Y-%m-%d)\n\n"
+
+# Find & replace within a note
+obsidian-cli edit path="MEMORY.md" find="🟡 PENDING" replace="✅ DONE"
+obsidian-cli edit path="MEMORY.md" find="status: (open)" replace="status: closed" regex=true
+```
+
+### Browsing the vault
+```bash
+obsidian-cli list folder="People"              # list .md files in a folder
+obsidian-cli list folder="Projects"
+obsidian-cli list folder="."                   # vault root
+obsidian-cli status                            # vault overview + folder counts
+```
+
+### Moving & deleting
+```bash
+# Move + updates [[wikilinks]] across the vault when filename changes
+obsidian-cli move path="old/note.md" to="new/note.md"
+
+# Delete
+obsidian-cli delete path="Archive/stale.md"
+```
+
+### Searching
+```bash
+obsidian-cli search query="Athens"             # search by filename
+obsidian-cli search-content query="Moraitis"   # full-text with context lines
+obsidian-cli search-content query="lease" max=5 context=5
+```
+
+### Vault path
+```bash
+obsidian-cli print-default                     # workspace (/path/to/vault)
+obsidian-cli print-default --path-only         # /path/to/vault
+```
 
 ## Workflow
 
-### 1) Resolve the vault
-
+### 1) Session startup
 ```bash
-python3 scripts/life_memory.py show-vault
-python3 scripts/life_memory.py set-vault --vault-path "/path/to/vault"
+obsidian-cli read path="SOUL.md"
+obsidian-cli read path="USER.md"
+obsidian-cli daily:read
+obsidian-cli read path="MEMORY.md"   # main sessions only
 ```
 
-### 2) Retrieve context first
-
+### 2) Log events
 ```bash
-python3 scripts/life_memory.py search --query "Athens move"
-python3 scripts/life_memory.py read --file "Daily/2026-02-14.md"
+obsidian-cli daily:append content="## $(date -u +%H:%M) UTC\n- <event>"
 ```
 
-### 3) Log high-signal events to today
-
+### 3) Update long-term notes
 ```bash
-python3 scripts/life_memory.py log-event \
-  --category "Health" \
-  --event "Doctor referral sent" \
-  --details "Follow-up booked for next week" \
-  --tags "health,referral"
+obsidian-cli append path="MEMORY.md" content="\n## New section\n- fact"
+# or targeted edit:
+obsidian-cli edit path="MEMORY.md" find="old status" replace="new status"
 ```
 
-### 4) Organize the vault safely
-
-Preview first:
-
+### 4) Maintain knowledge graph
 ```bash
-python3 scripts/life_memory.py organize
+obsidian-cli list folder="People"              # check coverage
+obsidian-cli search-content query="[[Person]]" # find references
+obsidian-cli move path="People/old.md" to="People/correct-name.md"
 ```
 
-Apply changes:
+## Note on `\n` in content
 
-```bash
-python3 scripts/life_memory.py organize --apply
-```
+All write commands (`append`, `create`, `daily:append`, `daily:create`) use `printf '%b'` internally, which interprets:
+- `\n` → newline
+- `\t` → tab
 
-### 5) Distill daily notes into long-term memory
-
-```bash
-python3 scripts/life_memory.py distill --date "2026-02-14"
-```
-
-### 6) Audit graph health
-
-```bash
-python3 scripts/life_memory.py audit
-```
-
-## Pre-Prompt Hook
-
-This skill includes an `agent:bootstrap` hook (`hooks/obsidian-preprompt.js`) that automatically injects the essence of the current daily log into the agent's context as `OBSIDIAN_DAILY.md`. This ensures continuity without requiring manual tool calls.
+So pass multi-line content as: `content="## Heading\n- item one\n- item two"`
 
 ## Resources
 
-- Script entrypoint: `scripts/life_memory.py`
-- Pre-Prompt hook: `hooks/obsidian-preprompt.js`
-- Pattern guide: `references/life-patterns.md`
-- Obsidian CLI notes: `references/obsidian-cli-notes.md`
+- CLI binary: `/usr/local/bin/obsidian-cli`
+- Source: `bin/obsidian-cli` (this repo)
+- Vault path: `/root/.openclaw/workspace`
+- Daily notes: `/root/.openclaw/workspace/memory/YYYY-MM-DD.md`

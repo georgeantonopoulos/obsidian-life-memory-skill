@@ -54,8 +54,6 @@ class ObsidianCLI:
 
     def run(self, command: str, *args: str) -> str:
         cmd = [self.binary, command, *args]
-        if os.geteuid() == 0:
-            cmd.append("--no-sandbox")
 
         env = os.environ.copy()
         if env.get("DISPLAY") is None:
@@ -361,9 +359,10 @@ def _compress_events(event_lines: list[str]) -> list[str]:
 def cmd_distill(args: argparse.Namespace) -> None:
     _, vault = _store_and_vault()
     date = args.date
-    daily_file = vault / "Daily" / f"{date}.md"
+    daily_candidates = [vault / "memory" / f"{date}.md", vault / "Daily" / f"{date}.md"]
+    daily_file = next((p for p in daily_candidates if p.exists()), daily_candidates[0])
     if not daily_file.exists():
-        raise LifeMemoryError(f"Daily note not found: {daily_file}")
+        raise LifeMemoryError(f"Daily note not found: {daily_candidates[0]} or {daily_candidates[1]}")
 
     daily_text = daily_file.read_text(encoding="utf-8")
     event_lines = _extract_event_lines(daily_text)
@@ -376,10 +375,22 @@ def cmd_distill(args: argparse.Namespace) -> None:
     if not memory_file.exists():
         memory_file.write_text("# MEMORY\n\n", encoding="utf-8")
 
+    existing_memory = memory_file.read_text(encoding="utf-8")
+    section_header = f"## Distilled {date}"
+    if section_header in existing_memory:
+        # Replace existing section instead of appending a duplicate
+        pattern = re.compile(
+            rf"^{re.escape(section_header)}$.*?(?=^## |\Z)",
+            re.MULTILINE | re.DOTALL,
+        )
+        existing_memory = pattern.sub("", existing_memory).rstrip() + "\n"
+        memory_file.write_text(existing_memory, encoding="utf-8")
+        print(f"replaced existing distill for {date}")
+
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     block = [
         f"## Distilled {date}",
-        f"- Source: [[Daily/{date}]]",
+        f"- Source: [[memory/{date}]]",
         f"- Updated: {stamp}",
         f"- Compression: kept {len(compact)}/{len(event_lines)} high-signal events",
         "- Highlights:",
@@ -389,133 +400,133 @@ def cmd_distill(args: argparse.Namespace) -> None:
     print(f"distilled {len(compact)} high-signal events")
 
 
-def _extract_all_wikilinks(vault: Path) -> dict:
-    """Extract all wikilinks from markdown files, return {file: [links]}."""
-    wikilink_re = re.compile(r"!?!?\[\[([^\]|]+)(?:\|[^\]]*)?\]\]")
-    links: dict[str, list[str]] = {}
+def _get_all_markdown_files(vault: Path) -> List[Path]:
+    """Get all markdown files in vault, excluding hidden folders."""
+    files: List[Path] = []
     for md in vault.rglob("*.md"):
-        if "/.obsidian/" in str(md) or "/.git/" in str(md):
+        # Skip hidden folders like .git, .obsidian
+        if any(part.startswith(".") for part in md.relative_to(vault).parts):
             continue
-        try:
-            text = md.read_text(encoding="utf-8", errors="ignore")
-            found = wikilink_re.findall(text)
-            if found:
-                links[str(md.relative_to(vault))] = [l.strip() for l in found]
-        except Exception:
-            continue
+        files.append(md)
+    return files
+
+
+def _extract_wikilinks(text: str) -> List[str]:
+    """Extract wikilinks from text, handling aliases."""
+    links: List[str] = []
+    # Match [[Page]] or [[Page|Alias]]
+    for m in re.finditer(r"\[\[([^|\]]+)(?:\|[^\]]+)?\]\]", text):
+        link = m.group(1).strip()
+        if link:
+            links.append(link)
     return links
 
 
-def _file_based_audit(vault: Path) -> None:
-    """Perform file-based audit when obsidian-cli is unavailable."""
-    # Collect all markdown files
-    all_files: set[str] = set()
-    for md in vault.rglob("*.md"):
-        if "/.obsidian/" in str(md) or "/.git/" in str(md):
-            continue
-        all_files.add(str(md.relative_to(vault)))
-
-    # Extract wikilinks
-    links = _extract_all_wikilinks(vault)
-
-    # Build link graph
-    inbound: dict[str, set[str]] = {f: set() for f in all_files}
-    outbound: dict[str, set[str]] = {}
-    broken_links: list[tuple[str, str]] = []
-
-    for src, targets in links.items():
-        outbound[src] = set()
-        for target in targets:
-            # Try to resolve the target
-            target_file = target + ".md"
-            target_path = vault / target_file
-            target_alt = vault / (target.replace(" ", "-") + ".md")
-
-            if target_file in all_files:
-                inbound[target_file].add(src)
-                outbound[src].add(target_file)
-            elif target_path.exists():
-                rel = str(target_path.relative_to(vault))
-                inbound[rel].add(src)
-                outbound[src].add(rel)
-            elif target_alt.exists():
-                rel = str(target_alt.relative_to(vault))
-                inbound[rel].add(src)
-                outbound[src].add(rel)
-            else:
-                broken_links.append((src, target))
-
-    # Orphans: files with no inbound links (exclude daily notes and core files)
-    core_files = {"SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md", "README.md"}
-    orphans = [f for f in all_files if not inbound[f] and f not in core_files and not DAILY_RE.match(f)]
-
-    # Dead ends: files with no outbound links
-    deadends = [f for f in all_files if f not in outbound or not outbound[f]]
-
-    # Unlinked dailies: daily notes without links to/from them
-    daily_files = [f for f in all_files if DAILY_RE.match(f)]
-    unlinked_dailies = [f for f in daily_files if not inbound[f] and not outbound.get(f)]
-
-    # Report
-    print("## orphans")
-    if orphans:
-        print(f"Found {len(orphans)} orphaned notes (no inbound links):")
-        for o in sorted(orphans)[:10]:
-            print(f"  - {o}")
-        if len(orphans) > 10:
-            print(f"  ... and {len(orphans) - 10} more")
-    else:
-        print("No orphaned notes found.")
-
-    print("\n## deadends")
-    if deadends:
-        print(f"Found {len(deadends)} dead-end notes (no outbound links):")
-        for d in sorted(deadends)[:10]:
-            print(f"  - {d}")
-        if len(deadends) > 10:
-            print(f"  ... and {len(deadends) - 10} more")
-    else:
-        print("No dead-end notes found.")
-
-    print("\n## unresolved")
-    if broken_links:
-        print(f"Found {len(broken_links)} broken wikilinks:")
-        for src, target in sorted(broken_links)[:10]:
-            print(f"  - {src} -> [[{target}]]")
-        if len(broken_links) > 10:
-            print(f"  ... and {len(broken_links) - 10} more")
-    else:
-        print("No broken wikilinks found.")
-
-    print("\n## daily_health")
-    if unlinked_dailies:
-        print(f"Found {len(unlinked_dailies)} daily notes with no connections:")
-        for d in sorted(unlinked_dailies)[-5:]:  # Show most recent
-            print(f"  - {d}")
-    else:
-        print("All daily notes are linked to the graph.")
-
-    print(f"\n📊 Summary: {len(all_files)} total notes, {len(links)} with wikilinks")
+def _resolve_link(link: str, vault: Path) -> Path:
+    """Resolve a wikilink to a potential file path."""
+    # Handle subfolder links like "Projects/athens-move"
+    link_path = link.replace(" ", "-").lower()
+    if "/" in link:
+        return vault / f"{link_path}.md"
+    # Try common folders
+    for folder in ["", "Projects", "People", "Places", "Vendors", "Events", "Daily", "Context", "Identity"]:
+        candidate = vault / folder / f"{link_path}.md"
+        if candidate.exists():
+            return candidate
+        # Case-insensitive fallback (catches HEARTBEAT.md, SOUL.md etc.)
+        parent = vault / folder if folder else vault
+        if parent.exists():
+            for f in parent.iterdir():
+                if f.suffix == ".md" and f.stem.lower() == link_path:
+                    return f
+    # Default to root
+    return vault / f"{link_path}.md"
 
 
-def cmd_audit(_: argparse.Namespace) -> None:
+def cmd_audit(args: argparse.Namespace) -> None:
     _, vault = _store_and_vault()
-    cli = ObsidianCLI(vault)
 
-    obsidian_available = True
-    checks = ["unresolved", "orphans", "deadends"]
-    for check in checks:
-        print(f"## {check}")
+    if not vault.exists():
+        raise LifeMemoryError(f"Vault does not exist: {vault}")
+    
+    files = _get_all_markdown_files(vault)
+    
+    # Build graph
+    all_links: dict[str, List[str]] = {}
+    all_notes: set[str] = set()
+    link_targets: set[str] = set()
+    
+    for f in files:
+        rel_path = f.relative_to(vault)
+        note_name = rel_path.stem
+        all_notes.add(str(rel_path))
+        
         try:
-            print(cli.run(check, "total", "verbose"))
-        except LifeMemoryError as exc:
-            print(f"{check}: obsidian-cli unavailable ({exc})")
-            obsidian_available = False
+            text = f.read_text(encoding="utf-8", errors="ignore")
+            links = _extract_wikilinks(text)
+            all_links[str(rel_path)] = links
+            for link in links:
+                resolved = _resolve_link(link, vault)
+                link_targets.add(str(resolved.relative_to(vault)))
+        except Exception:
+            all_links[str(rel_path)] = []
+    
+    # orphans: notes not referenced by any other note
+    referenced = set()
+    for source, targets in all_links.items():
+        for link in targets:
+            resolved = _resolve_link(link, vault)
+            try:
+                referenced.add(str(resolved.relative_to(vault)))
+            except ValueError:
+                pass
+    
+    orphans = sorted(all_notes - referenced)
+    
+    # deadends: notes that don't reference any other notes
+    deadends = sorted([f for f in all_notes if not all_links.get(f, [])])
+    
+    # unresolved: links pointing to non-existent files
+    unresolved = []
+    for source, targets in all_links.items():
+        for link in targets:
+            resolved = _resolve_link(link, vault)
+            if not resolved.exists():
+                unresolved.append((source, link))
+    
+    # Output
+    if args.summary:
+        # Compact summary mode for cron/monitoring
+        total_notes = len(all_notes)
+        print(f"vault_health: orphans={len(orphans)} deadends={len(deadends)} unresolved={len(unresolved)} total_notes={total_notes}")
+        return
 
-    # If obsidian-cli failed, run file-based fallback
-    if not obsidian_available:
-        print("\n🔧 Running file-based audit fallback...\n")
-        _file_based_audit(vault)
+    print(f"## orphans ({len(orphans)} notes with no incoming links)")
+    if orphans:
+        for o in orphans[:20]:  # Limit output
+            print(f"  - {o}")
+        if len(orphans) > 20:
+            print(f"  ... and {len(orphans) - 20} more")
+    else:
+        print("  (none found)")
+
+    print(f"\n## deadends ({len(deadends)} notes with no outgoing links)")
+    if deadends:
+        for d in deadends[:20]:
+            print(f"  - {d}")
+        if len(deadends) > 20:
+            print(f"  ... and {len(deadends) - 20} more")
+    else:
+        print("  (none found)")
+
+    print(f"\n## unresolved ({len(unresolved)} broken links)")
+    if unresolved:
+        for source, link in unresolved[:20]:
+            print(f"  - {source} -> [[{link}]]")
+        if len(unresolved) > 20:
+            print(f"  ... and {len(unresolved) - 20} more")
+    else:
+        print("  (none found)")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -554,6 +565,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_distill)
 
     p = sub.add_parser("audit", help="Run graph health checks")
+    p.add_argument("--summary", action="store_true", help="Show compact summary for monitoring")
     p.set_defaults(func=cmd_audit)
 
     return parser
