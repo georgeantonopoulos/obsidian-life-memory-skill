@@ -123,3 +123,44 @@ So pass multi-line content as: `content="## Heading\n- item one\n- item two"`
 - Source: `bin/obsidian-cli` (this repo)
 - Vault path: `/root/.openclaw/workspace`
 - Daily notes: `/root/.openclaw/workspace/memory/YYYY-MM-DD.md`
+
+## Auto-Categorisation: gizmo-curate
+
+`gizmo-curate` extends the skill with LLM-powered auto-categorisation. Instead of manually deciding where to file new knowledge, pass raw text and the tool decides path, title, tags, and whether to create or append.
+
+### Usage
+```bash
+# File a person, project, place, or fact automatically
+gizmo-curate "Alice Smith is a contractor at Acme Corp, alice@acme.com"
+
+# Preview decision without writing
+gizmo-curate --dry-run "some text"
+
+# Pipe mode
+echo "some text" | gizmo-curate
+```
+
+### How it works
+1. Sends text + vault folder structure to Gemini Flash (~1.2s)
+2. Gets back: `action` (create/append), `path`, `title`, `tags`, formatted markdown
+3. Writes to vault via `obsidian-cli`
+
+### Decision rules
+| Content type | Target path |
+|---|---|
+| Person | `People/firstname-lastname.md` |
+| Project fact | `Projects/project-name.md` (appends if exists) |
+| Place | `Places/place-name.md` |
+| Financial | `Finance/` |
+| Vendor/service | `Vendors/` |
+| Unsure | `Notes/` |
+
+### Integration points
+- **Nightly Memory cron (3am)**: auto-curates up to 3 new entities found in daily note
+- **Manual**: call `gizmo-curate` any time during a session for instant filing
+- **Coding agents**: `gizmo-curate` available on PATH for Codex/Claude Code to save project context
+
+### Binary
+- `/usr/local/bin/gizmo-curate`
+- Source: `/root/gizmo_curate.py`
+- Requires: `GEMINI_API_KEY` env var (pre-configured in OpenClaw runtime)
