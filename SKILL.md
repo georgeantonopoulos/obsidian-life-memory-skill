@@ -164,3 +164,69 @@ echo "some text" | gizmo-curate
 - `/usr/local/bin/gizmo-curate`
 - Source: `/root/gizmo_curate.py`
 - Requires: `GEMINI_API_KEY` env var (pre-configured in OpenClaw runtime)
+
+
+---
+
+## Wiki Pattern (Karpathy llm-wiki)
+
+Three workflows for building a compounding personal knowledge base.
+
+### Ingest workflow
+When user sends a source (URL/PDF/text) to add to the wiki:
+```bash
+# 1. Read source (web_fetch, pdf tool, etc.)
+# 2. Discuss with user
+# 3. Create source summary page
+obsidian-cli create path="Sources/YYYY-MM-DD_slug.md" content="# Title
+
+- **Source**: URL
+- **Ingested**: date
+
+## Summary
+..."
+
+# 4. Update relevant entity pages
+obsidian-cli append path="Projects/relevant.md" content="
+## Source update YYYY-MM-DD
+- key takeaway"
+
+# 5. Update index
+obsidian-cli edit path="index.md" find="## Sources" replace="## Sources
+- [[Sources/YYYY-MM-DD_slug]] — one-line summary"
+
+# 6. Log it
+obsidian-cli append path="log.md" content="
+## [YYYY-MM-DD] ingest | Source Title
+Pages updated: list"
+```
+
+### Query → file back
+After producing substantive synthesis (analysis, comparison, research):
+```bash
+# Offer to file, then:
+obsidian-cli create path="Projects/analysis-slug.md" content="# Analysis Title
+
+..."
+obsidian-cli append path="log.md" content="
+## [YYYY-MM-DD] query | Analysis Title
+Filed from conversation."
+# Update index.md entry
+```
+
+### Lint workflow
+```bash
+# Check for dead wikilinks, orphan pages, stale MEMORY.md entries
+obsidian-cli search-content query="<!-- Stub"  # find stub pages needing content
+obsidian-cli read path="index.md"               # audit for missing pages
+obsidian-cli append path="log.md" content="
+## [YYYY-MM-DD] lint | Weekly health check
+Issues: ..."
+```
+
+### Key files
+| File | Purpose |
+|------|---------|
+| `index.md` | Catalog of all wiki pages with one-line descriptions |
+| `log.md` | Append-only history of ingests/queries/lint passes |
+| `Sources/` | One page per external source ingested |
