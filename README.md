@@ -160,6 +160,40 @@ obsidian-cli read path="MEMORY.md"
 
 ---
 
+## Wiki Pattern (Karpathy llm-wiki)
+
+The vault implements the [llm-wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — a persistent, compounding knowledge base maintained by the LLM. Instead of re-deriving answers from raw sources on every query, the agent incrementally builds and maintains a structured wiki of interlinked Markdown pages.
+
+### Three workflows
+
+**Ingest** — You send a URL, PDF, or text. The agent reads it, creates a `Sources/YYYY-MM-DD_slug.md` summary page, updates relevant entity pages (`Projects/`, `People/`, `Places/`), updates `index.md`, and appends to `log.md`. A single source can touch 5–15 pages.
+
+**Query → file back** — When the agent produces a substantive synthesis (analysis, comparison, research summary), it offers to file the result as a wiki page. Your explorations compound in the knowledge base, not just disappear into chat history.
+
+**Lint** — Weekly (or on-demand) health check: dead wikilinks, orphan pages, important stubs, stale status items. Runs as a scheduled cron job.
+
+### Key files
+
+| File | Purpose |
+|------|---------|
+| `index.md` | Catalog of every wiki page with one-line descriptions. Loaded at every session bootstrap so the agent always knows what exists. |
+| `log.md` | Append-only record of ingests/queries/lint passes. Format: `## [YYYY-MM-DD] action | title`. Parseable: `grep "^## [" log.md | tail -5` |
+| `Sources/` | One Markdown page per ingested external source. Immutable summaries. |
+
+### Vault taxonomy (extended)
+```
+workspace/
+├── index.md                 # Wiki catalog — all pages with one-liners
+├── log.md                   # Append-only ingest/query/lint history
+├── Sources/                 # External source summaries (one per source)
+├── Projects/                # Active projects
+├── People/                  # Real people
+├── Places/                  # Real locations
+...
+```
+
+---
+
 ## Token-Optimized Pre-Prompt Hook
 
 `hooks/obsidian-preprompt.js` handles two injection paths:
