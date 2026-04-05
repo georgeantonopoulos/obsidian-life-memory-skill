@@ -198,7 +198,7 @@ workspace/
 
 `hooks/obsidian-preprompt.js` handles two injection paths:
 
-**Session start (`agent:bootstrap`):** injects governance files + daily snapshot once per session.
+**Session start (`agent:bootstrap`):** injects governance files + daily snapshot once per session. It also automatically loads any files specified in the `OBSIDIAN_OPTIONAL_CONTEXT_FILES` environment variable (e.g., `Context/retrieval_policy.md`) to enforce mandatory system behaviors like active graph traversal and wikilink resolution.
 
 **Per-turn retrieval (`before_prompt_build`):** derives 1–3 queries from the current message, retrieves a small bounded set of snippets, injects as targeted context. Never auto-writes to the vault.
 
